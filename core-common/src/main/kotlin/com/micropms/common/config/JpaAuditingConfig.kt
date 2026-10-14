@@ -1,5 +1,6 @@
 package com.micropms.common.config
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.domain.AuditorAware
@@ -17,6 +18,7 @@ import java.util.UUID
 class JpaAuditingConfig {
 
     @Bean
+    @ConditionalOnMissingBean(AuditorAware::class)
     fun auditorAware(): AuditorAware<UUID> {
         return AuditorAware {
             val authentication = SecurityContextHolder.getContext()?.authentication

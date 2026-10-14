@@ -1334,18 +1334,18 @@ abstract class BaseTenantEntity : BaseAuditEntity() {
     fileName: 'TenantContext.kt',
     language: 'kotlin',
     category: 'multitenancy',
-    description: 'ThreadLocal<UUID> holding tenant identity with strict lifecycle isolation',
+    description: 'ThreadLocal<UUID?> wrapping object with inline fun runWithTenant for safe scoped execution',
     code: `package com.micropms.multitenancy.context
 
 import java.util.UUID
 
 /**
- * Thread-safe holder for the current execution thread's tenant context.
- * Guaranteed to be cleaned up after request completion to prevent thread-pool leakage.
+ * Thread-safe Kotlin object wrapping ThreadLocal<UUID?> for managing the active tenant context.
+ * Strictly guarantees clean lifecycle and prevention of thread pool poisoning.
  */
 object TenantContext {
 
-    private val currentTenant = ThreadLocal<UUID>()
+    private val currentTenant = ThreadLocal<UUID?>()
 
     fun setTenantId(tenantId: UUID) {
         currentTenant.set(tenantId)
@@ -1363,6 +1363,159 @@ object TenantContext {
     fun clear() {
         currentTenant.remove()
     }
+
+    /**
+     * Executes the given code block within the specified tenant scope and guarantees cleanup
+     * or context restoration in a finally block to prevent thread-pool poisoning.
+     */
+    inline fun <T> runWithTenant(tenantId: UUID, block: () -> T): T {
+        val previousTenantId = getTenantId()
+        setTenantId(tenantId)
+        return try {
+            block()
+        } finally {
+            if (previousTenantId != null) {
+                setTenantId(previousTenantId)
+            } else {
+                clear()
+            }
+        }
+    }
+}`
+  },
+  {
+    id: 'custom-jwt-converter',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/security/CustomJwtAuthenticationConverter.kt',
+    fileName: 'CustomJwtAuthenticationConverter.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Converter mapping JWT claims (sub->UUID, tenant_id->UUID, role->ROLE_*, authorities) to TenantAuthenticationToken',
+    code: `package com.micropms.multitenancy.security
+
+import org.slf4j.LoggerFactory
+import org.springframework.core.convert.converter.Converter
+import org.springframework.security.authentication.AbstractAuthenticationToken
+import org.springframework.security.authentication.BadCredentialsException
+import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.stereotype.Component
+import java.util.UUID
+
+/**
+ * Production JWT converter decoding claims into an authenticated TenantAuthenticationToken:
+ * - 'sub' claim -> Principal User ID (UUID)
+ * - 'tenant_id' claim -> Extracted Tenant ID (UUID)
+ * - 'role' claim -> Mapped to "ROLE_<ROLE_NAME>"
+ * - 'authorities' array claim -> Mapped to List<SimpleGrantedAuthority> for @PreAuthorize
+ */
+@Component
+class CustomJwtAuthenticationConverter : Converter<Jwt, AbstractAuthenticationToken> {
+
+    private val log = LoggerFactory.getLogger(CustomJwtAuthenticationConverter::class.java)
+
+    override fun convert(jwt: Jwt): AbstractAuthenticationToken {
+        // 1. Resolve Principal User ID ('sub')
+        val subClaim = jwt.subject ?: jwt.getClaimAsString("sub")
+            ?: throw BadCredentialsException("JWT token is missing mandatory 'sub' claim")
+        val userId = try {
+            UUID.fromString(subClaim)
+        } catch (e: Exception) {
+            throw BadCredentialsException("JWT 'sub' claim '\$subClaim' is not a valid UUID format")
+        }
+
+        // 2. Resolve Tenant ID ('tenant_id')
+        val tenantIdClaim = jwt.getClaimAsString("tenant_id")
+            ?: throw BadCredentialsException("JWT token is missing mandatory 'tenant_id' claim")
+        val tenantId = try {
+            UUID.fromString(tenantIdClaim)
+        } catch (e: Exception) {
+            throw BadCredentialsException("JWT 'tenant_id' claim '\$tenantIdClaim' is not a valid UUID format")
+        }
+
+        // 3. Resolve authorities and roles
+        val authorities = mutableSetOf<GrantedAuthority>()
+
+        // Map 'role' claim to "ROLE_<ROLE_NAME>"
+        val roleClaim = jwt.getClaimAsString("role")
+        if (!roleClaim.isNullOrBlank()) {
+            val roleFormatted = if (roleClaim.startsWith("ROLE_")) roleClaim else "ROLE_\$roleClaim"
+            authorities.add(SimpleGrantedAuthority(roleFormatted))
+        }
+
+        // Map 'authorities' claim to SimpleGrantedAuthority
+        val authoritiesClaim = jwt.claims["authorities"]
+        when (authoritiesClaim) {
+            is Collection<*> -> {
+                authoritiesClaim.filterIsInstance<String>().forEach { auth ->
+                    if (auth.isNotBlank()) {
+                        authorities.add(SimpleGrantedAuthority(auth.trim()))
+                    }
+                }
+            }
+            is String -> {
+                authoritiesClaim.split(",", " ").forEach { auth ->
+                    if (auth.isNotBlank()) {
+                        authorities.add(SimpleGrantedAuthority(auth.trim()))
+                    }
+                }
+            }
+        }
+
+        val principal = TenantUserPrincipal(
+            userId = userId,
+            tenantId = tenantId,
+            email = jwt.getClaimAsString("email"),
+            username = jwt.getClaimAsString("preferred_username")
+        )
+
+        return TenantAuthenticationToken(
+            jwt = jwt,
+            principal = principal,
+            authorities = authorities
+        )
+    }
+}`
+  },
+  {
+    id: 'tenant-auth-token',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/security/TenantAuthenticationToken.kt',
+    fileName: 'TenantAuthenticationToken.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Spring Security authentication token holding TenantUserPrincipal and fine-grained authorities',
+    code: `package com.micropms.multitenancy.security
+
+import org.springframework.security.authentication.AbstractAuthenticationToken
+import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.oauth2.jwt.Jwt
+import java.util.UUID
+
+data class TenantUserPrincipal(
+    val userId: UUID,
+    val tenantId: UUID,
+    val email: String? = null,
+    val username: String? = null
+)
+
+class TenantAuthenticationToken(
+    val jwt: Jwt,
+    val principal: TenantUserPrincipal,
+    authorities: Collection<GrantedAuthority>
+) : AbstractAuthenticationToken(authorities) {
+
+    init {
+        super.setAuthenticated(true)
+    }
+
+    val userId: UUID get() = principal.userId
+    val tenantId: UUID get() = principal.tenantId
+
+    override fun getCredentials(): Any = jwt
+    override fun getPrincipal(): TenantUserPrincipal = principal
+    override fun getName(): String = principal.userId.toString()
 }`
   },
   {
@@ -1372,11 +1525,12 @@ object TenantContext {
     fileName: 'TenantInterceptor.kt',
     language: 'kotlin',
     category: 'multitenancy',
-    description: 'HandlerInterceptor binding verified JWT tenant claim and clearing TenantContext in afterCompletion',
+    description: 'HandlerInterceptor binding verified JWT tenant claim on preHandle and cleaning up in afterCompletion',
     code: `package com.micropms.multitenancy.interceptor
 
 import com.micropms.multitenancy.context.TenantContext
 import com.micropms.multitenancy.security.TenantAuthenticationToken
+import com.micropms.multitenancy.security.TenantUserPrincipal
 import jakarta.servlet.http.HttpServletRequest
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
@@ -1384,52 +1538,74 @@ import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Component
 import org.springframework.web.servlet.HandlerInterceptor
 
-/**
- * Interceptor responsible for binding the cryptographically verified tenant identity
- * from the Spring Security authentication token into the thread-local TenantContext,
- * and strictly clearing the context upon request completion.
- */
 @Component
 class TenantInterceptor : HandlerInterceptor {
 
     private val log = LoggerFactory.getLogger(TenantInterceptor::class.java)
 
-    override fun preHandle(
-        request: HttpServletRequest,
-        response: HttpServletResponse,
-        handler: Any
-    ): Boolean {
-        val authentication = SecurityContextHolder.getContext().authentication
-
+    override fun preHandle(request: HttpServletRequest, response: HttpServletResponse, handler: Any): Boolean {
+        val authentication = SecurityContextHolder.getContext()?.authentication
         if (authentication is TenantAuthenticationToken && authentication.isAuthenticated) {
-            val tenantId = authentication.tenantId
-            TenantContext.setTenantId(tenantId)
-            log.trace("TenantContext initialized with tenantId: {}", tenantId)
+            TenantContext.setTenantId(authentication.tenantId)
+            log.trace("TenantContext bound from TenantAuthenticationToken: {}", authentication.tenantId)
         }
-
         return true
     }
 
-    override fun afterCompletion(
-        request: HttpServletRequest,
-        response: HttpServletResponse,
-        handler: Any,
-        ex: Exception?
-    ) {
-        // ALWAYS clean up TenantContext to prevent thread-pool contamination across requests
+    override fun afterCompletion(request: HttpServletRequest, response: HttpServletResponse, handler: Any, ex: Exception?) {
         TenantContext.clear()
-        log.trace("TenantContext cleanly removed from thread")
+        log.trace("TenantContext cleanly removed from thread in afterCompletion")
     }
 }`
   },
   {
-    id: 'postgres-rls',
+    id: 'spring-security-auditor-aware',
     module: 'core-multitenancy',
-    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/database/PostgresRlsConnectionPreparer.kt',
-    fileName: 'PostgresRlsConnectionPreparer.kt',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/auditing/SpringSecurityAuditorAware.kt',
+    fileName: 'SpringSecurityAuditorAware.kt',
     language: 'kotlin',
     category: 'multitenancy',
-    description: 'Enforces PostgreSQL RLS by setting SET LOCAL app.current_tenant_id = :tenantId on transaction start',
+    description: 'AuditorAware<UUID> returning authenticated user UUID from SecurityContext for createdBy/lastModifiedBy',
+    code: `package com.micropms.multitenancy.auditing
+
+import com.micropms.multitenancy.security.TenantAuthenticationToken
+import org.springframework.data.domain.AuditorAware
+import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.stereotype.Component
+import java.util.Optional
+import java.util.UUID
+
+@Component("auditorAware")
+class SpringSecurityAuditorAware : AuditorAware<UUID> {
+
+    override fun getCurrentAuditor(): Optional<UUID> {
+        val authentication = SecurityContextHolder.getContext()?.authentication
+            ?: return Optional.empty()
+
+        if (!authentication.isAuthenticated || authentication.principal == "anonymousUser") {
+            return Optional.empty()
+        }
+
+        return if (authentication is TenantAuthenticationToken) {
+            Optional.of(authentication.userId)
+        } else {
+            try {
+                Optional.of(UUID.fromString(authentication.name))
+            } catch (e: Exception) {
+                Optional.empty()
+            }
+        }
+    }
+}`
+  },
+  {
+    id: 'postgres-rls-aspect',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/database/PostgresRlsAspect.kt',
+    fileName: 'PostgresRlsAspect.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Aspect executing SET LOCAL app.current_tenant_id = :tenantId on @Transactional boundaries',
     code: `package com.micropms.multitenancy.database
 
 import com.micropms.multitenancy.context.TenantContext
@@ -1443,41 +1619,101 @@ import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Component
 import java.util.UUID
 
-/**
- * Enforces database-level isolation via PostgreSQL Row Level Security (RLS).
- * Intercepts @Transactional method executions to inject the tenant context
- * into PostgreSQL session variables:
- *
- *   SET LOCAL app.current_tenant_id = '<tenant-id>';
- */
 @Aspect
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
-class PostgresRlsConnectionPreparer(
+class PostgresRlsAspect(
     private val jdbcTemplate: JdbcTemplate
 ) {
 
-    private val log = LoggerFactory.getLogger(PostgresRlsConnectionPreparer::class.java)
+    private val log = LoggerFactory.getLogger(PostgresRlsAspect::class.java)
 
     @Around("@annotation(org.springframework.transaction.annotation.Transactional) || @within(org.springframework.transaction.annotation.Transactional)")
-    fun enforceTenantRls(joinPoint: ProceedingJoinPoint): Any? {
+    fun applyTenantRlsBoundary(joinPoint: ProceedingJoinPoint): Any? {
         val tenantId = TenantContext.getTenantId()
-
         if (tenantId != null) {
-            setPostgresTenantSessionVariable(tenantId)
+            jdbcTemplate.execute("SET LOCAL app.current_tenant_id = '\$tenantId'")
+            log.trace("Applied PostgreSQL RLS session: SET LOCAL app.current_tenant_id = '{}'", tenantId)
         }
-
         return joinPoint.proceed()
     }
+}`
+  },
+  {
+    id: 'security-config',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/config/SecurityConfig.kt',
+    fileName: 'SecurityConfig.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Production Spring Security filter chain enforcing stateless sessions and OAuth2 resource server validation',
+    code: `package com.micropms.multitenancy.config
 
-    fun setPostgresTenantSessionVariable(tenantId: UUID) {
-        try {
-            jdbcTemplate.execute("SET LOCAL app.current_tenant_id = '\${tenantId}'")
-            log.trace("Configured PostgreSQL RLS session: app.current_tenant_id = {}", tenantId)
-        } catch (e: Exception) {
-            log.error("Failed to set PostgreSQL RLS session variable for tenant {}: {}", tenantId, e.message)
-            throw IllegalStateException("Database RLS tenant boundary could not be initialized", e)
-        }
+import com.micropms.multitenancy.security.CustomJwtAuthenticationConverter
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Configuration
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity
+import org.springframework.security.config.annotation.web.builders.HttpSecurity
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
+import org.springframework.security.config.http.SessionCreationPolicy
+import org.springframework.security.web.SecurityFilterChain
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity(prePostEnabled = true)
+class SecurityConfig(
+    private val customJwtAuthenticationConverter: CustomJwtAuthenticationConverter
+) {
+
+    @Bean
+    fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
+        http
+            .csrf { it.disable() }
+            .sessionManagement { it.sessionCreationPolicy(SessionCreationPolicy.STATELESS) }
+            .authorizeHttpRequests { auth ->
+                auth
+                    .requestMatchers("/api/public/**", "/api/auth/**", "/actuator/**", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                    .anyRequest().authenticated()
+            }
+            .oauth2ResourceServer { oauth2 ->
+                oauth2.jwt { jwtConfigurer ->
+                    jwtConfigurer.jwtAuthenticationConverter(customJwtAuthenticationConverter)
+                }
+            }
+
+        return http.build()
+    }
+}`
+  },
+  {
+    id: 'multitenancy-auto-config',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/config/MultiTenancyAutoConfiguration.kt',
+    fileName: 'MultiTenancyAutoConfiguration.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Auto-configuration wiring TenantInterceptor with exclusion paths (/api/public/**, /api/auth/**, /actuator/**)',
+    code: `package com.micropms.multitenancy.config
+
+import com.micropms.multitenancy.interceptor.TenantInterceptor
+import org.springframework.context.annotation.ComponentScan
+import org.springframework.context.annotation.Configuration
+import org.springframework.data.jpa.repository.config.EnableJpaAuditing
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer
+
+@Configuration
+@ComponentScan(basePackages = ["com.micropms.multitenancy"])
+@EnableJpaAuditing(auditorAwareRef = "auditorAware")
+class MultiTenancyAutoConfiguration(
+    private val tenantInterceptor: TenantInterceptor
+) : WebMvcConfigurer {
+
+    override fun addInterceptors(registry: InterceptorRegistry) {
+        registry.addInterceptor(tenantInterceptor)
+            .addPathPatterns("/**")
+            .excludePathPatterns("/api/public/**", "/api/auth/**", "/actuator/**", "/v3/api-docs/**", "/swagger-ui/**")
+            .order(1)
     }
 }`
   },
@@ -1751,6 +1987,27 @@ export default function App() {
   const [simulatedEndpoint, setSimulatedEndpoint] = useState<string>('get-patient');
   const [apiExecutionStatus, setApiExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
   const [apiResponsePayload, setApiResponsePayload] = useState<any>(null);
+
+  // JWT & runWithTenant Interactive State
+  const [simJwtSub, setSimJwtSub] = useState<string>('9e1c2b3a-4d5e-6f7a-8b9c-0d1e2f3a4b5c');
+  const [simJwtTenant, setSimJwtTenant] = useState<string>('a3b84180-2d6f-42a1-9c8e-5b1f81d94101');
+  const [simJwtRole, setSimJwtRole] = useState<string>('CLINICIAN');
+  const [simJwtAuthorities, setSimJwtAuthorities] = useState<string>('CLINICAL_READ, CLINICAL_WRITE');
+  const [scopedExecLogs, setScopedExecLogs] = useState<string[]>([]);
+
+  const handleTestRunWithTenant = () => {
+    const target = 'e4a2b1c0-789a-4bc1-9012-3456789abcde';
+    setScopedExecLogs([
+      `[T0] TenantContext.getTenantId() => null (Thread clean)`,
+      `[T1] Invoking TenantContext.runWithTenant("${target}")`,
+      `[T2] Inside scoped block: TenantContext.getTenantId() => ${target}`,
+      `[T3] Executing transactional clinical task with isolated DB boundary...`,
+      `[T4] PostgresRlsAspect triggers: SET LOCAL app.current_tenant_id = '${target}'`,
+      `[T5] Transaction completes (commit/rollback) -> SET LOCAL auto-discarded`,
+      `[T6] Finally block executes -> TenantContext.clear()`,
+      `[T7] After execution: TenantContext.getTenantId() => null (Zero pool poisoning!)`
+    ]);
+  };
 
   const selectedFile = useMemo(() => {
     return PROJECT_FILES.find(f => f.id === selectedFileId) || PROJECT_FILES[0];
@@ -2162,6 +2419,116 @@ export default function App() {
                       </>
                     )}
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* JWT Claim Processing & runWithTenant Interactive Simulator */}
+            <div className="border border-slate-800 bg-slate-900/30 rounded-lg p-6 space-y-6">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <Lock className="h-4 w-4 text-cyan-400" />
+                  CustomJwtAuthenticationConverter & Context Lifecycle Verification
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Simulate JWT claim decoding into TenantAuthenticationToken and test thread-safe runWithTenant scoped execution.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* JWT Claim Inputs */}
+                <div className="space-y-3 p-4 rounded bg-slate-950 border border-slate-800 text-xs">
+                  <div className="font-semibold text-slate-300 font-sans flex items-center justify-between">
+                    <span>Incoming JWT Claims Payload</span>
+                    <span className="text-[10px] text-cyan-400 font-mono">Resource Server Hook</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Subject UUID ('sub')</label>
+                    <input
+                      type="text"
+                      value={simJwtSub}
+                      onChange={(e) => setSimJwtSub(e.target.value)}
+                      className="w-full px-2.5 py-1 text-xs font-mono bg-slate-900 border border-slate-800 rounded text-slate-200 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Tenant ID ('tenant_id')</label>
+                    <input
+                      type="text"
+                      value={simJwtTenant}
+                      onChange={(e) => setSimJwtTenant(e.target.value)}
+                      className="w-full px-2.5 py-1 text-xs font-mono bg-slate-900 border border-slate-800 rounded text-slate-200 focus:outline-none focus:border-cyan-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Role ('role')</label>
+                      <input
+                        type="text"
+                        value={simJwtRole}
+                        onChange={(e) => setSimJwtRole(e.target.value)}
+                        className="w-full px-2.5 py-1 text-xs font-mono bg-slate-900 border border-slate-800 rounded text-slate-200 focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-400 mb-1">Authorities ('authorities')</label>
+                      <input
+                        type="text"
+                        value={simJwtAuthorities}
+                        onChange={(e) => setSimJwtAuthorities(e.target.value)}
+                        className="w-full px-2.5 py-1 text-xs font-mono bg-slate-900 border border-slate-800 rounded text-slate-200 focus:outline-none focus:border-cyan-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Scoped execution trigger button */}
+                  <div className="pt-2 border-t border-slate-900 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Context Lifecycle Hook:</span>
+                    <button
+                      onClick={handleTestRunWithTenant}
+                      className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-semibold rounded text-xs transition-colors flex items-center gap-1.5"
+                    >
+                      <Play className="h-3 w-3" />
+                      Test runWithTenant Scope
+                    </button>
+                  </div>
+                </div>
+
+                {/* Converter & Scope Outputs */}
+                <div className="space-y-3 p-4 rounded bg-slate-950 border border-slate-800 text-xs font-mono">
+                  <div className="font-semibold text-slate-300 font-sans flex items-center justify-between">
+                    <span>Decoded TenantAuthenticationToken</span>
+                    <span className="text-[10px] text-emerald-400">Authenticated = true</span>
+                  </div>
+
+                  <div className="bg-slate-900/80 p-3 rounded text-[11px] space-y-1.5 text-slate-300 overflow-x-auto">
+                    <div><span className="text-slate-500">principal.userId:</span> <span className="text-cyan-300">{simJwtSub}</span></div>
+                    <div><span className="text-slate-500">principal.tenantId:</span> <span className="text-emerald-300">{simJwtTenant}</span></div>
+                    <div><span className="text-slate-500">grantedRole:</span> <span className="text-amber-300">ROLE_{simJwtRole.toUpperCase()}</span></div>
+                    <div>
+                      <span className="text-slate-500">authorities:</span> [
+                      <span className="text-purple-300">
+                        {["ROLE_" + simJwtRole.toUpperCase(), ...simJwtAuthorities.split(',').map(s => s.trim()).filter(Boolean)].join(', ')}
+                      </span>]
+                    </div>
+                  </div>
+
+                  {/* Scoped execution chronological trace */}
+                  {scopedExecLogs.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-800 text-[11px] space-y-1 text-slate-400">
+                      <div className="font-sans font-medium text-slate-300 text-xs mb-1">
+                        Execution Trace (Guaranteed Cleanup):
+                      </div>
+                      {scopedExecLogs.map((log, idx) => (
+                        <div key={idx} className={idx === 2 || idx === 4 ? "text-cyan-300" : idx === 7 ? "text-emerald-400 font-bold" : ""}>
+                          {log}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

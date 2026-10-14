@@ -2,16 +2,26 @@ package com.micropms.multitenancy.security
 
 import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.oauth2.jwt.Jwt
 import java.util.UUID
 
 /**
- * Spring Security authentication token holding verified user credentials,
- * fine-grained RBAC authorities, and the isolated tenant identifier.
+ * Immutable domain principal encapsulating the authenticated tenant user.
  */
-class TenantAuthenticationToken(
+data class TenantUserPrincipal(
     val userId: UUID,
     val tenantId: UUID,
-    val email: String,
+    val email: String? = null,
+    val username: String? = null
+)
+
+/**
+ * Spring Security authentication token holding verified user credentials,
+ * the decoded JWT, fine-grained RBAC authorities, and the isolated tenant identifier.
+ */
+class TenantAuthenticationToken(
+    val jwt: Jwt,
+    val principal: TenantUserPrincipal,
     authorities: Collection<GrantedAuthority>
 ) : AbstractAuthenticationToken(authorities) {
 
@@ -19,11 +29,16 @@ class TenantAuthenticationToken(
         super.setAuthenticated(true)
     }
 
-    override fun getCredentials(): Any? = null
+    val userId: UUID get() = principal.userId
+    val tenantId: UUID get() = principal.tenantId
 
-    override fun getPrincipal(): Any = userId.toString()
+    override fun getCredentials(): Any = jwt
+
+    override fun getPrincipal(): TenantUserPrincipal = principal
+
+    override fun getName(): String = principal.userId.toString()
 
     override fun toString(): String {
-        return "TenantAuthenticationToken(userId=$userId, tenantId=$tenantId, authorities=$authorities)"
+        return "TenantAuthenticationToken(userId=${principal.userId}, tenantId=${principal.tenantId}, authorities=$authorities)"
     }
 }

@@ -3,12 +3,12 @@ package com.micropms.multitenancy.context
 import java.util.UUID
 
 /**
- * Thread-safe holder for the current execution thread's tenant context.
- * Guaranteed to be cleaned up after request completion to prevent thread-pool leakage.
+ * Thread-safe Kotlin object wrapping ThreadLocal<UUID?> for managing the active tenant context.
+ * Strictly guarantees clean lifecycle and prevention of thread pool poisoning.
  */
 object TenantContext {
 
-    private val currentTenant = ThreadLocal<UUID>()
+    private val currentTenant = ThreadLocal<UUID?>()
 
     fun setTenantId(tenantId: UUID) {
         currentTenant.set(tenantId)
@@ -25,5 +25,23 @@ object TenantContext {
 
     fun clear() {
         currentTenant.remove()
+    }
+
+    /**
+     * Executes the given code block within the specified tenant scope and guarantees cleanup
+     * or context restoration in a finally block to prevent thread-pool poisoning.
+     */
+    inline fun <T> runWithTenant(tenantId: UUID, block: () -> T): T {
+        val previousTenantId = getTenantId()
+        setTenantId(tenantId)
+        return try {
+            block()
+        } finally {
+            if (previousTenantId != null) {
+                setTenantId(previousTenantId)
+            } else {
+                clear()
+            }
+        }
     }
 }
