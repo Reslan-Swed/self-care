@@ -1,0 +1,110 @@
+package com.micropms.clinic.controller
+
+import com.micropms.common.controller.BaseController
+import com.micropms.clinic.entity.Encounter
+import com.micropms.clinic.entity.EncounterStatus
+import com.micropms.clinic.repository.EncounterRepository
+import jakarta.validation.constraints.NotNull
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RestController
+import java.time.Instant
+import java.util.UUID
+
+data class EncounterForm(
+    @field:NotNull(message = "Patient ID is required")
+    val patientId: UUID,
+
+    @field:NotNull(message = "Practitioner ID is required")
+    val practitionerId: UUID,
+
+    val status: EncounterStatus = EncounterStatus.IN_PROGRESS,
+    val subjectiveNotes: String? = null,
+    val objectiveNotes: String? = null,
+    val assessment: String? = null,
+    val plan: String? = null,
+    val icd10Codes: String? = null
+)
+
+data class EncounterResponseDto(
+    val id: UUID,
+    val patientId: UUID,
+    val practitionerId: UUID,
+    val encounterDate: Instant,
+    val status: EncounterStatus,
+    val subjectiveNotes: String?,
+    val objectiveNotes: String?,
+    val assessment: String?,
+    val plan: String?,
+    val icd10Codes: String?,
+    val createdAt: Instant,
+    val updatedAt: Instant
+)
+
+/**
+ * Controller strictly restricted to licensed clinical staff (Doctors, Nurse Practitioners).
+ * Staff with administrative or receptionist roles receive HTTP 403 Forbidden.
+ */
+@RestController
+@RequestMapping("/api/v1/clinic/encounters")
+@PreAuthorize("hasAuthority('CLINICAL_READ')")
+class EncounterController(
+    encounterRepository: EncounterRepository
+) : BaseController<Encounter, UUID, EncounterForm, EncounterResponseDto>(
+    repository = encounterRepository,
+    resourceName = "Clinical Encounter"
+) {
+
+    @PreAuthorize("hasAuthority('CLINICAL_WRITE')")
+    @Transactional
+    override fun create(form: EncounterForm) = super.create(form)
+
+    @PreAuthorize("hasAuthority('CLINICAL_WRITE')")
+    @Transactional
+    override fun update(id: UUID, form: EncounterForm) = super.update(id, form)
+
+    @PreAuthorize("hasAuthority('CLINICAL_ADMIN')")
+    @Transactional
+    override fun delete(id: UUID) = super.delete(id)
+
+    override fun toEntity(form: EncounterForm): Encounter {
+        return Encounter(
+            patientId = form.patientId,
+            practitionerId = form.practitionerId,
+            status = form.status,
+            subjectiveNotes = form.subjectiveNotes,
+            objectiveNotes = form.objectiveNotes,
+            assessment = form.assessment,
+            plan = form.plan,
+            icd10Codes = form.icd10Codes
+        )
+    }
+
+    override fun toResponseDto(entity: Encounter): EncounterResponseDto {
+        return EncounterResponseDto(
+            id = entity.id ?: throw IllegalStateException("Encounter ID unassigned"),
+            patientId = entity.patientId,
+            practitionerId = entity.practitionerId,
+            encounterDate = entity.encounterDate,
+            status = entity.status,
+            subjectiveNotes = entity.subjectiveNotes,
+            objectiveNotes = entity.objectiveNotes,
+            assessment = entity.assessment,
+            plan = entity.plan,
+            icd10Codes = entity.icd10Codes,
+            createdAt = entity.createdAt,
+            updatedAt = entity.updatedAt
+        )
+    }
+
+    override fun updateEntityFromForm(entity: Encounter, form: EncounterForm): Encounter {
+        entity.status = form.status
+        entity.subjectiveNotes = form.subjectiveNotes
+        entity.objectiveNotes = form.objectiveNotes
+        entity.assessment = form.assessment
+        entity.plan = form.plan
+        entity.icd10Codes = form.icd10Codes
+        return entity
+    }
+}
