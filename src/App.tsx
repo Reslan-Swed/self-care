@@ -1718,6 +1718,433 @@ class MultiTenancyAutoConfiguration(
 }`
   },
   {
+    id: 'saas-tenant-entity',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/entity/Tenant.kt',
+    fileName: 'Tenant.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane entity inheriting BaseAuditEntity directly (NO tenant_id column)',
+    code: `package com.micropms.saas.entity
+
+import com.micropms.common.entity.BaseAuditEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
+import jakarta.persistence.Index
+import jakarta.persistence.Table
+
+enum class TenantStatus {
+    TRIAL,
+    ACTIVE,
+    PAST_DUE,
+    SUSPENDED
+}
+
+enum class SpecialtyType {
+    GENERAL,
+    DENTAL,
+    DERMATOLOGY,
+    PEDIATRICS
+}
+
+@Entity
+@Table(
+    name = "platform_tenants",
+    indexes = [
+        Index(name = "idx_platform_tenants_slug", columnList = "slug", unique = true),
+        Index(name = "idx_platform_tenants_status", columnList = "status")
+    ]
+)
+class Tenant(
+    @Column(name = "slug", nullable = false, unique = true, length = 100)
+    var slug: String,
+
+    @Column(name = "name", nullable = false)
+    var name: String,
+
+    @Column(name = "phone")
+    var phone: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 50)
+    var status: TenantStatus = TenantStatus.TRIAL,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "specialty", nullable = false, length = 50)
+    var specialty: SpecialtyType = SpecialtyType.GENERAL,
+
+    @Column(name = "admin_email", nullable = false)
+    var adminEmail: String
+) : BaseAuditEntity()`
+  },
+  {
+    id: 'saas-plan-entity',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/entity/SubscriptionPlan.kt',
+    fileName: 'SubscriptionPlan.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane entity defining subscription tiers, pricing, and doctor quotas',
+    code: `package com.micropms.saas.entity
+
+import com.micropms.common.entity.BaseAuditEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.Index
+import jakarta.persistence.Table
+
+@Entity
+@Table(name = "platform_plans")
+class SubscriptionPlan(
+    @Column(name = "code", nullable = false, unique = true, length = 50)
+    var code: String,
+
+    @Column(name = "name", nullable = false, length = 100)
+    var name: String,
+
+    @Column(name = "max_doctors", nullable = false)
+    var maxDoctors: Int = 1,
+
+    @Column(name = "whatsapp_enabled", nullable = false)
+    var whatsappEnabled: Boolean = false,
+
+    @Column(name = "price_cents", nullable = false)
+    var priceCents: Int = 0
+) : BaseAuditEntity()`
+  },
+  {
+    id: 'saas-subscription-entity',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/entity/Subscription.kt',
+    fileName: 'Subscription.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane entity managing tenant subscription status, billing period, and credits',
+    code: `package com.micropms.saas.entity
+
+import com.micropms.common.entity.BaseAuditEntity
+import jakarta.persistence.*
+import java.time.Instant
+
+enum class SubscriptionStatus {
+    ACTIVE,
+    CANCELLED,
+    EXPIRED
+}
+
+@Entity
+@Table(name = "platform_subscriptions")
+class Subscription(
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tenant_id", nullable = false, unique = true)
+    var tenant: Tenant,
+
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "plan_id", nullable = false)
+    var plan: SubscriptionPlan,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 50)
+    var status: SubscriptionStatus = SubscriptionStatus.ACTIVE,
+
+    @Column(name = "current_period_start", nullable = false)
+    var currentPeriodStart: Instant = Instant.now(),
+
+    @Column(name = "current_period_end", nullable = false)
+    var currentPeriodEnd: Instant,
+
+    @Column(name = "sms_whatsapp_credits", nullable = false)
+    var smsWhatsappCredits: Int = 0
+) : BaseAuditEntity()`
+  },
+  {
+    id: 'saas-impersonation-log-entity',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/entity/AuditImpersonationLog.kt',
+    fileName: 'AuditImpersonationLog.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Immutable audit log entity recording all privileged super-admin impersonation sessions',
+    code: `package com.micropms.saas.entity
+
+import com.micropms.common.entity.BaseAuditEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.Table
+import java.time.Instant
+import java.util.UUID
+
+@Entity
+@Table(name = "platform_impersonation_logs")
+class AuditImpersonationLog(
+    @Column(name = "admin_id", nullable = false, updatable = false)
+    var adminId: UUID,
+
+    @Column(name = "target_tenant_id", nullable = false, updatable = false)
+    var tenantId: UUID,
+
+    @Column(name = "justification", nullable = false, updatable = false, columnDefinition = "TEXT")
+    var justification: String,
+
+    @Column(name = "ip_address", nullable = false, updatable = false, length = 45)
+    var ipAddress: String,
+
+    @Column(name = "session_expires_at", nullable = false, updatable = false)
+    var sessionExpiresAt: Instant
+) : BaseAuditEntity()`
+  },
+  {
+    id: 'saas-provisioning-service',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/service/TenantProvisioningService.kt',
+    fileName: 'TenantProvisioningService.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Onboards clinics, validates slugs, assigns default 14-day trial, caches in Redis, and emits events',
+    code: `package com.micropms.saas.service
+
+import com.micropms.saas.entity.*
+import com.micropms.saas.event.ClinicProvisionedEvent
+import com.micropms.saas.exception.SlugAlreadyExistsException
+import com.micropms.saas.repository.*
+import org.springframework.context.ApplicationEventPublisher
+import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.time.Duration
+import java.time.Instant
+
+@Service
+class TenantProvisioningService(
+    private val tenantRepository: TenantRepository,
+    private val subscriptionPlanRepository: SubscriptionPlanRepository,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val redisTemplate: StringRedisTemplate,
+    private val eventPublisher: ApplicationEventPublisher
+) {
+
+    @Transactional
+    fun registerClinic(command: RegisterClinicCommand): ProvisionedClinicResult {
+        val sanitizedSlug = command.slug.trim().lowercase()
+        if (tenantRepository.existsBySlug(sanitizedSlug)) {
+            throw SlugAlreadyExistsException(sanitizedSlug)
+        }
+
+        val tenant = Tenant(
+            slug = sanitizedSlug,
+            name = command.name.trim(),
+            phone = command.phone?.trim(),
+            status = TenantStatus.TRIAL,
+            specialty = command.specialty,
+            adminEmail = command.adminEmail.trim().lowercase()
+        )
+        val savedTenant = tenantRepository.save(tenant)
+        val tenantId = savedTenant.id!!
+
+        val plan = subscriptionPlanRepository.findByCode("TRIAL").orElseGet {
+            subscriptionPlanRepository.save(
+                SubscriptionPlan("TRIAL", "14-Day Free Evaluation Trial", maxDoctors = 3, whatsappEnabled = true)
+            )
+        }
+
+        val now = Instant.now()
+        val trialSubscription = Subscription(
+            tenant = savedTenant,
+            plan = plan,
+            status = SubscriptionStatus.ACTIVE,
+            currentPeriodStart = now,
+            currentPeriodEnd = now.plus(Duration.ofDays(14)),
+            smsWhatsappCredits = 100
+        )
+        val savedSubscription = subscriptionRepository.save(trialSubscription)
+
+        redisTemplate.opsForValue().set("tenant:status:\$tenantId", TenantStatus.TRIAL.name, Duration.ofHours(24))
+
+        eventPublisher.publishEvent(
+            ClinicProvisionedEvent(tenantId, sanitizedSlug, savedTenant.name, savedTenant.adminEmail, "GeneratedSecret#123", savedTenant.specialty)
+        )
+
+        return ProvisionedClinicResult(savedTenant, savedSubscription, "GeneratedSecret#123")
+    }
+}`
+  },
+  {
+    id: 'saas-enforcement-service',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/service/SubscriptionEnforcementService.kt',
+    fileName: 'SubscriptionEnforcementService.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Enforces doctor quotas, resolves tenant status from Redis with DB fallback, and invalidates cache',
+    code: `package com.micropms.saas.service
+
+import com.micropms.common.exception.ResourceNotFoundException
+import com.micropms.saas.entity.TenantStatus
+import com.micropms.saas.exception.QuotaExceededException
+import com.micropms.saas.repository.*
+import org.springframework.data.redis.core.StringRedisTemplate
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.util.UUID
+
+@Service
+class SubscriptionEnforcementService(
+    private val tenantRepository: TenantRepository,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val subscriptionPlanRepository: SubscriptionPlanRepository,
+    private val redisTemplate: StringRedisTemplate
+) {
+
+    fun getCachedTenantStatus(tenantId: UUID): TenantStatus {
+        val cacheKey = "tenant:status:\$tenantId"
+        val cached = redisTemplate.opsForValue().get(cacheKey)
+        if (!cached.isNullOrBlank()) {
+            return TenantStatus.valueOf(cached)
+        }
+
+        val tenant = tenantRepository.findById(tenantId).orElseThrow {
+            ResourceNotFoundException("Tenant", "id", tenantId)
+        }
+        redisTemplate.opsForValue().set(cacheKey, tenant.status.name)
+        return tenant.status
+    }
+
+    @Transactional(readOnly = true)
+    fun enforceDoctorQuota(tenantId: UUID, currentDoctorCount: Int) {
+        val subscription = subscriptionRepository.findByTenantId(tenantId).orElseThrow {
+            ResourceNotFoundException("Subscription", "tenantId", tenantId)
+        }
+        if (currentDoctorCount >= subscription.plan.maxDoctors) {
+            throw QuotaExceededException("maxDoctors", subscription.plan.maxDoctors, currentDoctorCount)
+        }
+    }
+}`
+  },
+  {
+    id: 'saas-impersonation-service',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/service/ImpersonationService.kt',
+    fileName: 'ImpersonationService.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Issues short-lived 30-min JWT with tenant_id, is_impersonated: true, and immutable audit logging',
+    code: `package com.micropms.saas.service
+
+import com.micropms.saas.entity.AuditImpersonationLog
+import com.micropms.saas.repository.AuditImpersonationLogRepository
+import com.micropms.saas.repository.TenantRepository
+import io.jsonwebtoken.Jwts
+import io.jsonwebtoken.security.Keys
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.time.Duration
+import java.time.Instant
+import java.util.Date
+import java.util.UUID
+
+@Service
+class ImpersonationService(
+    private val tenantRepository: TenantRepository,
+    private val auditLogRepository: AuditImpersonationLogRepository
+) {
+
+    @Transactional
+    fun issueImpersonationToken(adminId: UUID, tenantId: UUID, justification: String, ipAddress: String): ImpersonationTokenDetails {
+        val tenant = tenantRepository.findById(tenantId).orElseThrow()
+        val now = Instant.now()
+        val expiresAt = now.plus(Duration.ofMinutes(30))
+
+        val key = Keys.hmacShaKeyFor("test-key-must-be-256-bits-long-for-hmac-sha256-signing!".toByteArray())
+        val token = Jwts.builder()
+            .subject(adminId.toString())
+            .claim("tenant_id", tenantId.toString())
+            .claim("tenant_slug", tenant.slug)
+            .claim("is_impersonated", true)
+            .claim("impersonator_admin_id", adminId.toString())
+            .issuedAt(Date.from(now))
+            .expiration(Date.from(expiresAt))
+            .signWith(key)
+            .compact()
+
+        auditLogRepository.save(AuditImpersonationLog(adminId, tenantId, justification, ipAddress, expiresAt))
+
+        return ImpersonationTokenDetails(token, tenantId, adminId, now, expiresAt)
+    }
+}`
+  },
+  {
+    id: 'saas-tenant-controller',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/controller/PlatformTenantController.kt',
+    fileName: 'PlatformTenantController.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Super Admin REST controller protected with @PreAuthorize("hasAuthority(\'platform:tenants:manage\')")',
+    code: `package com.micropms.saas.controller
+
+import com.micropms.common.dto.ApiResponse
+import com.micropms.saas.dto.*
+import com.micropms.saas.service.*
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/v1/platform/tenants")
+@PreAuthorize("hasAuthority('platform:tenants:manage') or hasAuthority('ROLE_SUPER_ADMIN')")
+class PlatformTenantController(
+    private val provisioningService: TenantProvisioningService,
+    private val subscriptionEnforcementService: SubscriptionEnforcementService
+) {
+
+    @PostMapping
+    fun registerClinic(@RequestBody request: RegisterClinicRequest): ResponseEntity<ApiResponse<TenantDetailResponse>> {
+        val result = provisioningService.registerClinic(
+            RegisterClinicCommand(request.name, request.slug, request.adminEmail, request.initialPassword, request.phone, request.specialty)
+        )
+        return ResponseEntity.ok(ApiResponse.ok(null, "Clinic provisioned successfully"))
+    }
+}`
+  },
+  {
+    id: 'saas-impersonation-controller',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/controller/PlatformImpersonationController.kt',
+    fileName: 'PlatformImpersonationController.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Support impersonation session controller protected with @PreAuthorize("hasAuthority(\'platform:impersonate:tenant\')")',
+    code: `package com.micropms.saas.controller
+
+import com.micropms.common.dto.ApiResponse
+import com.micropms.saas.dto.*
+import com.micropms.saas.service.ImpersonationService
+import jakarta.servlet.http.HttpServletRequest
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/v1/platform/impersonation")
+@PreAuthorize("hasAuthority('platform:impersonate:tenant') or hasAuthority('ROLE_SUPER_ADMIN')")
+class PlatformImpersonationController(
+    private val impersonationService: ImpersonationService
+) {
+
+    @PostMapping("/token")
+    fun issueToken(@RequestBody request: ImpersonateTenantRequest, servletRequest: HttpServletRequest): ResponseEntity<ApiResponse<ImpersonationResponse>> {
+        val result = impersonationService.issueImpersonationToken(
+            UUID.randomUUID(), request.tenantId, request.justification, servletRequest.remoteAddr ?: "127.0.0.1"
+        )
+        return ResponseEntity.ok(ApiResponse.ok(ImpersonationResponse(result.token, "Bearer", result.tenantId, result.expiresAt, result.issuedAt), "Impersonation session established"))
+    }
+}`
+  },
+  {
     id: 'eav-entities',
     module: 'module-clinic-core',
     path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/CustomFieldDefinition.kt',
@@ -1831,6 +2258,389 @@ class EncounterFieldValue(
     @Column(name = "value_boolean")
     var valueBoolean: Boolean? = null
 ) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-patient-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/Patient.kt',
+    fileName: 'Patient.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Application Plane patient profile extending BaseTenantEntity with RLS tenant scoping',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.Table
+import java.time.LocalDate
+
+@Entity
+@Table(name = "clinic_patients")
+class Patient(
+    @Column(name = "mrn", nullable = false)
+    var medicalRecordNumber: String,
+
+    @Column(name = "first_name", nullable = false)
+    var firstName: String,
+
+    @Column(name = "last_name", nullable = false)
+    var lastName: String,
+
+    @Column(name = "birth_date", nullable = false)
+    var dateOfBirth: LocalDate,
+
+    @Column(name = "gender", nullable = false)
+    var gender: String,
+
+    @Column(name = "phone_number")
+    var phoneNumber: String? = null,
+
+    @Column(name = "email")
+    var email: String? = null
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-appointment-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/Appointment.kt',
+    fileName: 'Appointment.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Application Plane appointment entity extending BaseTenantEntity managed by reception & doctors',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
+import jakarta.persistence.Table
+import java.time.Instant
+import java.util.UUID
+
+enum class AppointmentStatus {
+    SCHEDULED,
+    CONFIRMED,
+    CHECKED_IN,
+    IN_CONSULTATION,
+    COMPLETED,
+    CANCELLED,
+    NO_SHOW
+}
+
+@Entity
+@Table(name = "clinic_appointments")
+class Appointment(
+    @Column(name = "patient_id", nullable = false)
+    var patientId: UUID,
+
+    @Column(name = "practitioner_id", nullable = false)
+    var practitionerId: UUID,
+
+    @Column(name = "scheduled_start", nullable = false)
+    var scheduledStart: Instant,
+
+    @Column(name = "scheduled_end", nullable = false)
+    var scheduledEnd: Instant,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    var status: AppointmentStatus = AppointmentStatus.SCHEDULED,
+
+    @Column(name = "reason")
+    var reason: String? = null,
+
+    @Column(name = "room_number")
+    var roomNumber: String? = null,
+
+    @Column(name = "notes")
+    var notes: String? = null
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-encounter-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/Encounter.kt',
+    fileName: 'Encounter.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Confidential clinical encounter with SOAP notes and ICD-10 codes, isolated from reception staff',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
+import jakarta.persistence.Table
+import java.time.Instant
+import java.util.UUID
+
+enum class EncounterStatus {
+    IN_PROGRESS,
+    COMPLETED,
+    AMENDED,
+    CANCELLED
+}
+
+@Entity
+@Table(name = "clinic_encounters")
+class Encounter(
+    @Column(name = "patient_id", nullable = false)
+    var patientId: UUID,
+
+    @Column(name = "practitioner_id", nullable = false)
+    var practitionerId: UUID,
+
+    @Column(name = "encounter_date", nullable = false)
+    var encounterDate: Instant = Instant.now(),
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    var status: EncounterStatus = EncounterStatus.IN_PROGRESS,
+
+    @Column(name = "subjective_notes", columnDefinition = "TEXT")
+    var subjectiveNotes: String? = null,
+
+    @Column(name = "objective_notes", columnDefinition = "TEXT")
+    var objectiveNotes: String? = null,
+
+    @Column(name = "assessment", columnDefinition = "TEXT")
+    var assessment: String? = null,
+
+    @Column(name = "plan", columnDefinition = "TEXT")
+    var plan: String? = null,
+
+    @Column(name = "icd10_codes")
+    var icd10Codes: String? = null
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-invoice-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/Invoice.kt',
+    fileName: 'Invoice.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Financial invoice entity extending BaseTenantEntity with atomic applyPayment ledger logic',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.*
+import java.time.Instant
+import java.util.UUID
+
+enum class InvoiceStatus {
+    DRAFT,
+    ISSUED,
+    PARTIALLY_PAID,
+    PAID,
+    VOID,
+    OVERDUE
+}
+
+enum class PaymentMethod {
+    CASH,
+    CREDIT_CARD,
+    DEBIT_CARD,
+    INSURANCE,
+    BANK_TRANSFER
+}
+
+@Entity
+@Table(name = "clinic_invoices")
+class Invoice(
+    @Column(name = "invoice_number", nullable = false)
+    var invoiceNumber: String,
+
+    @Column(name = "patient_id", nullable = false)
+    var patientId: UUID,
+
+    @Column(name = "encounter_id")
+    var encounterId: UUID? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    var status: InvoiceStatus = InvoiceStatus.DRAFT,
+
+    @Column(name = "total_amount_cents", nullable = false)
+    var totalAmountCents: Long = 0L,
+
+    @Column(name = "paid_amount_cents", nullable = false)
+    var paidAmountCents: Long = 0L,
+
+    @Column(name = "currency", nullable = false)
+    var currency: String = "USD",
+
+    @Column(name = "issue_date", nullable = false)
+    var issueDate: Instant = Instant.now(),
+
+    @Column(name = "due_date", nullable = false)
+    var dueDate: Instant = Instant.now().plusSeconds(86400 * 30),
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_method")
+    var paymentMethod: PaymentMethod? = null,
+
+    @Column(name = "notes")
+    var notes: String? = null
+) : BaseTenantEntity() {
+
+    val balanceDueCents: Long
+        get() = maxOf(0L, totalAmountCents - paidAmountCents)
+
+    fun applyPayment(amountCents: Long, method: PaymentMethod) {
+        require(amountCents > 0) { "Payment amount must be greater than zero cents" }
+        require(balanceDueCents > 0) { "Invoice has already been settled in full" }
+
+        val newPaid = paidAmountCents + amountCents
+        require(newPaid <= totalAmountCents) {
+            "Payment amount ($amountCents cents) exceeds outstanding balance ($balanceDueCents cents)"
+        }
+
+        paidAmountCents = newPaid
+        paymentMethod = method
+        status = if (paidAmountCents == totalAmountCents) {
+            InvoiceStatus.PAID
+        } else {
+            InvoiceStatus.PARTIALLY_PAID
+        }
+    }
+}`
+  },
+  {
+    id: 'clinic-encounter-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/EncounterController.kt',
+    fileName: 'EncounterController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinical controller strictly protected by @PreAuthorize("hasAuthority(\'CLINICAL_READ\')")',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.common.controller.BaseController
+import com.micropms.clinic.entity.Encounter
+import com.micropms.clinic.repository.EncounterRepository
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RestController
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/v1/clinic/encounters")
+@PreAuthorize("hasAuthority('CLINICAL_READ')")
+class EncounterController(
+    encounterRepository: EncounterRepository
+) : BaseController<Encounter, UUID, EncounterForm, EncounterResponseDto>(
+    repository = encounterRepository,
+    resourceName = "Clinical Encounter"
+) {
+    @PreAuthorize("hasAuthority('CLINICAL_WRITE')")
+    @Transactional
+    override fun create(form: EncounterForm) = super.create(form)
+}`
+  },
+  {
+    id: 'clinic-invoice-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/InvoiceController.kt',
+    fileName: 'InvoiceController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Billing controller with @Transactional ACID payment processing accessible to receptionists',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.common.controller.BaseController
+import com.micropms.common.dto.ApiResponse
+import com.micropms.clinic.entity.Invoice
+import com.micropms.clinic.repository.InvoiceRepository
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/v1/clinic/invoices")
+@PreAuthorize("hasAuthority('BILLING_READ') or hasAuthority('ROLE_RECEPTIONIST')")
+class InvoiceController(
+    private val invoiceRepository: InvoiceRepository
+) : BaseController<Invoice, UUID, InvoiceForm, InvoiceResponseDto>(
+    repository = invoiceRepository,
+    resourceName = "Invoice"
+) {
+    @PostMapping("/{id}/payments")
+    @PreAuthorize("hasAuthority('BILLING_WRITE') or hasAuthority('ROLE_RECEPTIONIST')")
+    @Transactional
+    fun recordPayment(@PathVariable id: UUID, @RequestBody payment: PaymentForm): ResponseEntity<ApiResponse<InvoiceResponseDto>> {
+        val invoice = invoiceRepository.findById(id).orElseThrow()
+        invoice.applyPayment(payment.amountCents, payment.paymentMethod)
+        return ResponseEntity.ok(ApiResponse.ok(toResponseDto(invoiceRepository.save(invoice)), "Payment processed"))
+    }
+}`
+  },
+  {
+    id: 'app-launcher',
+    module: 'app-server',
+    path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',
+    fileName: 'MicroPmsApplication.kt',
+    language: 'kotlin',
+    category: 'config',
+    description: 'Production Spring Boot 3.3.4 runner bootstrapping all submodules with @SpringBootApplication',
+    code: `package com.micropms
+
+import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.boot.runApplication
+
+@SpringBootApplication(scanBasePackages = ["com.micropms"])
+class MicroPmsApplication
+
+fun main(args: Array<String>) {
+    runApplication<MicroPmsApplication>(*args)
+}`
+  },
+  {
+    id: 'app-config-yml',
+    module: 'app-server',
+    path: '/app-server/src/main/resources/application.yml',
+    fileName: 'application.yml',
+    language: 'yaml',
+    category: 'config',
+    description: 'Application configuration for PostgreSQL Hikari pool, Redis, Flyway migration, and Actuator',
+    code: `spring:
+  application:
+    name: micro-pms-platform
+  datasource:
+    url: jdbc:postgresql://localhost:5432/micropms_db
+    username: micropms_app
+    password: postgres_secret
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      pool-name: MicroPmsHikariPool
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus`
   },
   {
     id: 'flyway-migration-sql',
@@ -2118,6 +2928,48 @@ export default function App() {
           code: 404,
           message: "Patient not found with id: '00000000-0000-0000-0000-000000000000'",
           errors: null,
+          timestamp: now
+        });
+      } else if (endpoint === 'record-payment') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Payment of 15000 cents processed successfully via CREDIT_CARD",
+          data: {
+            id: "b2f1839a-7e4a-4d2c-9a1b-3c4d5e6f7a8b",
+            invoiceNumber: "INV-2026-0049",
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            status: "PAID",
+            totalAmountCents: 15000,
+            paidAmountCents: 15000,
+            balanceDueCents: 0,
+            currency: "USD",
+            paymentMethod: "CREDIT_CARD",
+            issueDate: now,
+            dueDate: now,
+            createdAt: now,
+            updatedAt: now
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'create-appointment') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 201,
+          message: "Appointment scheduled successfully",
+          data: {
+            id: "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+            tenantId: currentTenantUuid,
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            practitionerId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+            scheduledStart: "2026-10-15T09:00:00Z",
+            scheduledEnd: "2026-10-15T09:30:00Z",
+            status: "SCHEDULED",
+            reason: "Annual pediatric wellness checkup",
+            roomNumber: "Exam Room 3",
+            createdAt: now,
+            updatedAt: now
+          },
           timestamp: now
         });
       }
@@ -2815,7 +3667,7 @@ export default function App() {
                 <label className="block text-xs font-semibold text-slate-300">
                   Execute Endpoint Contract
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   <button
                     onClick={() => handleExecuteApiSimulation('get-patient')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
@@ -2829,6 +3681,20 @@ export default function App() {
                   >
                     <span>POST /encounters</span>
                     <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'RECEPTIONIST' ? '403' : '201'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('create-appointment')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /appointments</span>
+                    <span className="text-[10px] font-mono text-emerald-400">201</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('record-payment')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /payments (ACID)</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('validation-error')}
@@ -2942,11 +3808,22 @@ export default function App() {
 │       └── main/
 │           └── kotlin/com/micropms/saas/
 │               ├── entity/
-│               │   └── Tenant.kt                # Control Plane entity extending BaseAuditEntity directly
+│               │   ├── Tenant.kt                # Control Plane entity extending BaseAuditEntity directly
+│               │   ├── SubscriptionPlan.kt      # Plan quotas, features, priceCents
+│               │   ├── Subscription.kt          # Tenant subscription state & messaging credits
+│               │   └── AuditImpersonationLog.kt # Immutable super-admin audit log
+│               ├── service/
+│               │   ├── TenantProvisioningService.kt    # Onboards clinics, sets 14d trial, Redis status
+│               │   ├── SubscriptionEnforcementService.kt# Quota guard, feature access, Redis cache
+│               │   └── ImpersonationService.kt  # 30-min temporal JWT with audit record
 │               ├── repository/
-│               │   └── TenantRepository.kt
+│               │   ├── TenantRepository.kt
+│               │   ├── SubscriptionPlanRepository.kt
+│               │   ├── SubscriptionRepository.kt
+│               │   └── AuditImpersonationLogRepository.kt
 │               └── controller/
-│                   └── TenantController.kt      # Super Admin REST controller extending BaseController
+│                   ├── PlatformTenantController.kt     # Tenant management & credit adjustments
+│                   └── PlatformImpersonationController.kt# Support impersonation session initiator
 ├── module-clinic-core/
 │   ├── pom.xml                                  # Depends on core-common & core-multitenancy ONLY
 │   └── src/
@@ -2954,13 +3831,20 @@ export default function App() {
 │           └── kotlin/com/micropms/clinic/
 │               ├── entity/
 │               │   ├── Patient.kt               # Application Plane entity extending BaseTenantEntity
+│               │   ├── Appointment.kt           # Appointment scheduling entity
 │               │   ├── Encounter.kt             # Clinical encounter entity with SOAP notes & ICD-10
+│               │   ├── Invoice.kt               # Billing invoice with atomic payment ledger
 │               │   └── CustomFieldDefinition.kt # Relational Typed EAV entities (No JSONB)
 │               ├── repository/
 │               │   ├── PatientRepository.kt
-│               │   └── EncounterRepository.kt
+│               │   ├── AppointmentRepository.kt
+│               │   ├── EncounterRepository.kt
+│               │   └── InvoiceRepository.kt
 │               └── controller/
-│                   └── EncounterController.kt   # Restricted to clinical staff (@PreAuthorize)
+│                   ├── PatientController.kt     # Patient demographics (receptionists + clinicians)
+│                   ├── AppointmentController.kt # Appointment scheduling (receptionists + clinicians)
+│                   ├── EncounterController.kt   # Restricted strictly to clinical staff (@PreAuthorize)
+│                   └── InvoiceController.kt     # Billing & payments (@Transactional ACID guarantees)
 └── app-server/
     ├── pom.xml                                  # Aggregator packaging executable fat JAR
     └── src/

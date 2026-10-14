@@ -5,31 +5,52 @@ import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
+import jakarta.persistence.Index
 import jakarta.persistence.Table
 
 enum class TenantStatus {
+    TRIAL,
     ACTIVE,
-    SUSPENDED,
-    TRIALING,
-    DEACTIVATED
+    PAST_DUE,
+    SUSPENDED
+}
+
+enum class SpecialtyType {
+    GENERAL,
+    DENTAL,
+    DERMATOLOGY,
+    PEDIATRICS
 }
 
 /**
  * Control Plane entity representing an isolated clinic organization or practice.
- * Strictly extends BaseAuditEntity (Control Plane entities DO NOT have a tenant_id).
+ * Strictly inherits BaseAuditEntity directly and NEVER extends BaseTenantEntity.
  */
 @Entity
-@Table(name = "platform_tenants")
+@Table(
+    name = "platform_tenants",
+    indexes = [
+        Index(name = "idx_platform_tenants_slug", columnList = "slug", unique = true),
+        Index(name = "idx_platform_tenants_status", columnList = "status")
+    ]
+)
 class Tenant(
+    @Column(name = "slug", nullable = false, unique = true, length = 100)
+    var slug: String,
+
     @Column(name = "name", nullable = false)
     var name: String,
 
-    @Column(name = "subdomain", nullable = false, unique = true)
-    var subdomain: String,
+    @Column(name = "phone")
+    var phone: String? = null,
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
-    var status: TenantStatus = TenantStatus.TRIALING,
+    @Column(name = "status", nullable = false, length = 50)
+    var status: TenantStatus = TenantStatus.TRIAL,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "specialty", nullable = false, length = 50)
+    var specialty: SpecialtyType = SpecialtyType.GENERAL,
 
     @Column(name = "admin_email", nullable = false)
     var adminEmail: String

@@ -16,9 +16,11 @@ CREATE TABLE platform_tenants (
     created_by UUID,
     last_modified_by UUID,
     version BIGINT NOT NULL DEFAULT 0,
+    slug VARCHAR(100) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
-    subdomain VARCHAR(100) NOT NULL UNIQUE,
-    status VARCHAR(50) NOT NULL DEFAULT 'TRIALING',
+    phone VARCHAR(50),
+    status VARCHAR(50) NOT NULL DEFAULT 'TRIAL',
+    specialty VARCHAR(50) NOT NULL DEFAULT 'GENERAL',
     admin_email VARCHAR(255) NOT NULL
 );
 
@@ -29,11 +31,11 @@ CREATE TABLE platform_plans (
     created_by UUID,
     last_modified_by UUID,
     version BIGINT NOT NULL DEFAULT 0,
-    name VARCHAR(100) NOT NULL UNIQUE,
-    monthly_price_cents INT NOT NULL,
-    max_practitioners INT NOT NULL,
-    max_patients INT NOT NULL,
-    features_summary TEXT
+    code VARCHAR(50) NOT NULL UNIQUE,
+    name VARCHAR(100) NOT NULL,
+    max_doctors INT NOT NULL DEFAULT 1,
+    whatsapp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    price_cents INT NOT NULL DEFAULT 0
 );
 
 CREATE TABLE platform_subscriptions (
@@ -43,11 +45,26 @@ CREATE TABLE platform_subscriptions (
     created_by UUID,
     last_modified_by UUID,
     version BIGINT NOT NULL DEFAULT 0,
-    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL UNIQUE REFERENCES platform_tenants(id) ON DELETE CASCADE,
     plan_id UUID NOT NULL REFERENCES platform_plans(id),
     status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
     current_period_start TIMESTAMPTZ NOT NULL,
-    current_period_end TIMESTAMPTZ NOT NULL
+    current_period_end TIMESTAMPTZ NOT NULL,
+    sms_whatsapp_credits INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE platform_impersonation_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by UUID,
+    last_modified_by UUID,
+    version BIGINT NOT NULL DEFAULT 0,
+    admin_id UUID NOT NULL,
+    target_tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE CASCADE,
+    justification TEXT NOT NULL,
+    ip_address VARCHAR(45) NOT NULL,
+    session_expires_at TIMESTAMPTZ NOT NULL
 );
 
 -- -------------------------------------------------------------------------
@@ -89,6 +106,46 @@ CREATE TABLE clinic_encounters (
     assessment TEXT,
     plan TEXT,
     icd10_codes VARCHAR(255)
+);
+
+CREATE TABLE clinic_appointments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by UUID,
+    last_modified_by UUID,
+    version BIGINT NOT NULL DEFAULT 0,
+    patient_id UUID NOT NULL REFERENCES clinic_patients(id) ON DELETE RESTRICT,
+    practitioner_id UUID NOT NULL,
+    scheduled_start TIMESTAMPTZ NOT NULL,
+    scheduled_end TIMESTAMPTZ NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'SCHEDULED',
+    reason VARCHAR(255),
+    room_number VARCHAR(50),
+    notes TEXT
+);
+
+CREATE TABLE clinic_invoices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by UUID,
+    last_modified_by UUID,
+    version BIGINT NOT NULL DEFAULT 0,
+    invoice_number VARCHAR(100) NOT NULL,
+    patient_id UUID NOT NULL REFERENCES clinic_patients(id) ON DELETE RESTRICT,
+    encounter_id UUID REFERENCES clinic_encounters(id) ON DELETE SET NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'DRAFT',
+    total_amount_cents BIGINT NOT NULL DEFAULT 0,
+    paid_amount_cents BIGINT NOT NULL DEFAULT 0,
+    currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+    issue_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    due_date TIMESTAMPTZ NOT NULL,
+    payment_method VARCHAR(50),
+    notes TEXT,
+    CONSTRAINT uq_invoice_number_per_tenant UNIQUE (tenant_id, invoice_number)
 );
 
 -- -------------------------------------------------------------------------
@@ -152,8 +209,14 @@ CREATE TABLE encounter_field_values (
 ALTER TABLE clinic_patients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clinic_patients FORCE ROW LEVEL SECURITY;
 
+ALTER TABLE clinic_appointments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clinic_appointments FORCE ROW LEVEL SECURITY;
+
 ALTER TABLE clinic_encounters ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clinic_encounters FORCE ROW LEVEL SECURITY;
+
+ALTER TABLE clinic_invoices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clinic_invoices FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE custom_field_definitions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE custom_field_definitions FORCE ROW LEVEL SECURITY;
@@ -170,7 +233,17 @@ CREATE POLICY rls_patients_isolation ON clinic_patients
     USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
 
+CREATE POLICY rls_appointments_isolation ON clinic_appointments
+    FOR ALL
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+
 CREATE POLICY rls_encounters_isolation ON clinic_encounters
+    FOR ALL
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+
+CREATE POLICY rls_invoices_isolation ON clinic_invoices
     FOR ALL
     USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
@@ -192,6 +265,9 @@ CREATE POLICY rls_encounter_field_values_isolation ON encounter_field_values
 
 -- Indexes for performance
 CREATE INDEX idx_patients_tenant_id ON clinic_patients (tenant_id);
+CREATE INDEX idx_appointments_tenant_patient ON clinic_appointments (tenant_id, patient_id);
+CREATE INDEX idx_appointments_tenant_practitioner ON clinic_appointments (tenant_id, practitioner_id, scheduled_start);
 CREATE INDEX idx_encounters_tenant_patient ON clinic_encounters (tenant_id, patient_id);
+CREATE INDEX idx_invoices_tenant_patient ON clinic_invoices (tenant_id, patient_id);
 CREATE INDEX idx_eav_values_encounter ON encounter_field_values (tenant_id, encounter_id);
 CREATE INDEX idx_eav_definitions_specialty ON custom_field_definitions (tenant_id, specialty);
