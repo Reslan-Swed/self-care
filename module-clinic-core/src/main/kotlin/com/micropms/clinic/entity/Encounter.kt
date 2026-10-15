@@ -5,6 +5,10 @@ import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
+import jakarta.persistence.FetchType
+import jakarta.persistence.JoinColumn
+import jakarta.persistence.ManyToOne
+import jakarta.persistence.OneToOne
 import jakarta.persistence.Table
 import java.time.Instant
 import java.util.UUID
@@ -17,37 +21,66 @@ enum class EncounterStatus {
 }
 
 /**
- * Highly confidential clinical encounter entity holding SOAP notes and diagnostic data.
- * Isolated strictly from reception staff; requires CLINICAL_READ or CLINICAL_WRITE authorities.
+ * Confidential clinical encounter entity holding SOAP notes and diagnostic data.
+ * Isolated strictly from reception staff; requires encounter:clinical:read or encounter:clinical:write authorities.
  */
 @Entity
 @Table(name = "clinic_encounters")
 class Encounter(
-    @Column(name = "patient_id", nullable = false)
-    var patientId: UUID,
+    @OneToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "appointment_id")
+    var appointment: Appointment? = null,
 
-    @Column(name = "practitioner_id", nullable = false)
-    var practitionerId: UUID,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "patient_id", nullable = false)
+    var patient: Patient,
 
-    @Column(name = "encounter_date", nullable = false)
-    var encounterDate: Instant = Instant.now(),
+    @Column(name = "doctor_id", nullable = false)
+    var doctorId: UUID,
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
-    var status: EncounterStatus = EncounterStatus.IN_PROGRESS,
+    @Column(name = "chief_complaint", nullable = false, columnDefinition = "TEXT")
+    var chiefComplaint: String,
 
     @Column(name = "subjective_notes", columnDefinition = "TEXT")
     var subjectiveNotes: String? = null,
 
-    @Column(name = "objective_notes", columnDefinition = "TEXT")
-    var objectiveNotes: String? = null,
+    @Column(name = "objective_exam", columnDefinition = "TEXT")
+    var objectiveExam: String? = null,
 
-    @Column(name = "assessment", columnDefinition = "TEXT")
-    var assessment: String? = null,
+    @Column(name = "diagnosis", nullable = false, columnDefinition = "TEXT")
+    var diagnosis: String,
 
-    @Column(name = "plan", columnDefinition = "TEXT")
-    var plan: String? = null,
+    @Column(name = "prescription", columnDefinition = "TEXT")
+    var prescription: String? = null,
 
-    @Column(name = "icd10_codes")
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    var status: EncounterStatus = EncounterStatus.COMPLETED,
+
+    @Column(name = "encounter_date", nullable = false)
+    var encounterDate: Instant = Instant.now()
+) : BaseTenantEntity() {
+
+    // Compatibility properties
+    var patientId: UUID
+        get() = patient.id
+        set(_) {}
+
+    var practitionerId: UUID
+        get() = doctorId
+        set(value) { doctorId = value }
+
+    var assessment: String?
+        get() = diagnosis
+        set(value) { if (value != null) diagnosis = value }
+
+    var plan: String?
+        get() = prescription
+        set(value) { prescription = value }
+
+    var objectiveNotes: String?
+        get() = objectiveExam
+        set(value) { objectiveExam = value }
+
     var icd10Codes: String? = null
-) : BaseTenantEntity()
+}

@@ -9,5 +9,7 @@ import java.util.UUID
 
 @Repository
 interface EncounterRepository : BaseRepository<Encounter, UUID> {
+    fun findByPatientIdOrderByEncounterDateDesc(patientId: UUID): List<Encounter>
     fun findByPatientId(patientId: UUID, pageable: Pageable): Page<Encounter>
+    fun findByAppointmentId(appointmentId: UUID): Encounter?
 }

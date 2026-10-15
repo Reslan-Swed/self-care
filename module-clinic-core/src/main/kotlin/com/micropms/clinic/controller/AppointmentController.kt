@@ -4,11 +4,13 @@ import com.micropms.common.controller.BaseController
 import com.micropms.clinic.entity.Appointment
 import com.micropms.clinic.entity.AppointmentStatus
 import com.micropms.clinic.repository.AppointmentRepository
+import com.micropms.clinic.repository.PatientRepository
 import jakarta.validation.constraints.NotNull
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 
@@ -52,7 +54,8 @@ data class AppointmentResponseDto(
 @RequestMapping("/api/v1/clinic/appointments")
 @PreAuthorize("hasAuthority('APPOINTMENT_READ') or hasAuthority('ROLE_RECEPTIONIST') or hasAuthority('ROLE_DOCTOR')")
 class AppointmentController(
-    appointmentRepository: AppointmentRepository
+    appointmentRepository: AppointmentRepository,
+    private val patientRepository: PatientRepository
 ) : BaseController<Appointment, UUID, AppointmentForm, AppointmentResponseDto>(
     repository = appointmentRepository,
     resourceName = "Appointment"
@@ -74,16 +77,22 @@ class AppointmentController(
         require(form.scheduledEnd.isAfter(form.scheduledStart)) {
             "Appointment end time must be after start time"
         }
-        return Appointment(
-            patientId = form.patientId,
-            practitionerId = form.practitionerId,
-            scheduledStart = form.scheduledStart,
-            scheduledEnd = form.scheduledEnd,
+        val patient = patientRepository.findById(form.patientId)
+            .orElseThrow { IllegalArgumentException("Patient not found with ID: ${form.patientId}") }
+
+        val duration = Duration.between(form.scheduledStart, form.scheduledEnd).toMinutes().toInt().coerceAtLeast(5)
+
+        val appt = Appointment(
+            patient = patient,
+            doctorId = form.practitionerId,
+            scheduledAt = form.scheduledStart,
+            durationMinutes = duration,
             status = form.status,
-            reason = form.reason?.trim(),
-            roomNumber = form.roomNumber?.trim(),
-            notes = form.notes?.trim()
+            reasonForVisit = form.reason?.trim()
         )
+        appt.roomNumber = form.roomNumber?.trim()
+        appt.notes = form.notes?.trim()
+        return appt
     }
 
     override fun toResponseDto(entity: Appointment): AppointmentResponseDto {
@@ -107,7 +116,7 @@ class AppointmentController(
             "Appointment end time must be after start time"
         }
         entity.scheduledStart = form.scheduledStart
-        entity.scheduledEnd = form.scheduledEnd
+        entity.durationMinutes = Duration.between(form.scheduledStart, form.scheduledEnd).toMinutes().toInt().coerceAtLeast(5)
         entity.status = form.status
         entity.reason = form.reason?.trim()
         entity.roomNumber = form.roomNumber?.trim()

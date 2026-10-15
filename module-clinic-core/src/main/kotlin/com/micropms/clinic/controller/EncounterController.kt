@@ -4,6 +4,7 @@ import com.micropms.common.controller.BaseController
 import com.micropms.clinic.entity.Encounter
 import com.micropms.clinic.entity.EncounterStatus
 import com.micropms.clinic.repository.EncounterRepository
+import com.micropms.clinic.repository.PatientRepository
 import jakarta.validation.constraints.NotNull
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.transaction.annotation.Transactional
@@ -48,37 +49,42 @@ data class EncounterResponseDto(
  */
 @RestController
 @RequestMapping("/api/v1/clinic/encounters")
-@PreAuthorize("hasAuthority('CLINICAL_READ')")
+@PreAuthorize("hasAuthority('encounter:clinical:read') or hasAuthority('CLINICAL_READ')")
 class EncounterController(
-    encounterRepository: EncounterRepository
+    encounterRepository: EncounterRepository,
+    private val patientRepository: PatientRepository
 ) : BaseController<Encounter, UUID, EncounterForm, EncounterResponseDto>(
     repository = encounterRepository,
     resourceName = "Clinical Encounter"
 ) {
 
-    @PreAuthorize("hasAuthority('CLINICAL_WRITE')")
+    @PreAuthorize("hasAuthority('encounter:clinical:write') or hasAuthority('CLINICAL_WRITE')")
     @Transactional
     override fun create(form: EncounterForm) = super.create(form)
 
-    @PreAuthorize("hasAuthority('CLINICAL_WRITE')")
+    @PreAuthorize("hasAuthority('encounter:clinical:write') or hasAuthority('CLINICAL_WRITE')")
     @Transactional
     override fun update(id: UUID, form: EncounterForm) = super.update(id, form)
 
-    @PreAuthorize("hasAuthority('CLINICAL_ADMIN')")
+    @PreAuthorize("hasAuthority('encounter:clinical:write') or hasAuthority('CLINICAL_ADMIN')")
     @Transactional
     override fun delete(id: UUID) = super.delete(id)
 
     override fun toEntity(form: EncounterForm): Encounter {
-        return Encounter(
-            patientId = form.patientId,
-            practitionerId = form.practitionerId,
-            status = form.status,
+        val patient = patientRepository.findById(form.patientId)
+            .orElseThrow { IllegalArgumentException("Patient not found with ID: ${form.patientId}") }
+        val encounter = Encounter(
+            patient = patient,
+            doctorId = form.practitionerId,
+            chiefComplaint = form.subjectiveNotes ?: "Clinical Consultation",
             subjectiveNotes = form.subjectiveNotes,
-            objectiveNotes = form.objectiveNotes,
-            assessment = form.assessment,
-            plan = form.plan,
-            icd10Codes = form.icd10Codes
+            objectiveExam = form.objectiveNotes,
+            diagnosis = form.assessment ?: "Clinical Evaluation",
+            prescription = form.plan,
+            status = form.status
         )
+        encounter.icd10Codes = form.icd10Codes
+        return encounter
     }
 
     override fun toResponseDto(entity: Encounter): EncounterResponseDto {

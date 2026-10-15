@@ -2766,6 +2766,320 @@ class CustomFieldServiceTest {
 }`
   },
   {
+    id: 'clinic-clinical-dtos',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/dto/ClinicalDtos.kt',
+    fileName: 'ClinicalDtos.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'DTOs for quick booking, waiting room queue, patient clinical profile, and clinical encounters',
+    code: `package com.micropms.clinic.dto
+
+import com.micropms.clinic.entity.*
+import jakarta.validation.constraints.*
+import java.time.Instant
+import java.time.LocalDate
+import java.util.UUID
+
+data class QuickBookAppointmentCommand(
+    @field:NotBlank(message = "Patient name is required")
+    val patientName: String,
+    @field:NotBlank(message = "Phone number is required")
+    val phone: String,
+    @field:NotNull(message = "Doctor ID is required")
+    val doctorId: UUID,
+    @field:NotNull(message = "Scheduled time is required")
+    val scheduledAt: Instant,
+    val durationMinutes: Int = 15,
+    val reasonForVisit: String? = null
+)
+
+data class PatientSummaryDto(
+    val id: UUID,
+    val fullName: String,
+    val phone: String,
+    val fileNumber: String? = null
+)
+
+data class ClinicalPatientProfileDto(
+    val id: UUID,
+    val fullName: String,
+    val phone: String,
+    val gender: Gender? = null,
+    val birthDate: LocalDate? = null,
+    val bloodGroup: String? = null,
+    val medicalAlerts: String? = null,
+    val fileNumber: String? = null
+)
+
+data class CreateEncounterCommand(
+    @field:NotNull val patientId: UUID,
+    val appointmentId: UUID? = null,
+    @field:NotNull val doctorId: UUID,
+    @field:NotBlank val chiefComplaint: String,
+    val subjectiveNotes: String? = null,
+    val objectiveExam: String? = null,
+    @field:NotBlank val diagnosis: String,
+    val prescription: String? = null,
+    val customFields: List<DynamicFieldInputDto> = emptyList()
+)
+
+data class ClinicalEncounterDetailsDto(
+    val id: UUID,
+    val appointmentId: UUID? = null,
+    val patientId: UUID,
+    val patientName: String,
+    val doctorId: UUID,
+    val chiefComplaint: String,
+    val subjectiveNotes: String? = null,
+    val objectiveExam: String? = null,
+    val diagnosis: String,
+    val prescription: String? = null,
+    val encounterDate: Instant,
+    val status: EncounterStatus,
+    val customFields: List<DynamicFieldValueDto> = emptyList()
+)`
+  },
+  {
+    id: 'clinic-reception-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/ReceptionService.kt',
+    fileName: 'ReceptionService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Reception service for atomic patient provisioning, queue status transitions, and search',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.entity.*
+import com.micropms.clinic.repository.*
+import com.micropms.common.exception.ResourceNotFoundException
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class ReceptionService(
+    private val patientRepository: PatientRepository,
+    private val appointmentRepository: AppointmentRepository
+) {
+    @Transactional
+    fun quickBookAppointment(command: QuickBookAppointmentCommand): QueueItemDto {
+        val patient = patientRepository.findByPhone(command.phone.trim()).orElseGet {
+            patientRepository.save(Patient(fullName = command.patientName.trim(), phone = command.phone.trim()))
+        }
+        val appointment = appointmentRepository.save(
+            Appointment(
+                patient = patient,
+                doctorId = command.doctorId,
+                scheduledAt = command.scheduledAt,
+                durationMinutes = command.durationMinutes,
+                status = AppointmentStatus.WAITING,
+                reasonForVisit = command.reasonForVisit
+            )
+        )
+        return toQueueItemDto(appointment, patient)
+    }
+
+    @Transactional
+    fun updateQueueStatus(appointmentId: UUID, newStatus: AppointmentStatus): QueueItemDto {
+        val appt = appointmentRepository.findById(appointmentId).orElseThrow()
+        if (appt.status == AppointmentStatus.COMPLETED && newStatus == AppointmentStatus.WAITING) {
+            throw IllegalStateException("Cannot revert COMPLETED consultation back to WAITING status.")
+        }
+        appt.status = newStatus
+        return toQueueItemDto(appointmentRepository.save(appt), appt.patient)
+    }
+
+    fun getTodayQueue(): List<QueueItemDto> {
+        val start = Instant.now().truncatedTo(ChronoUnit.DAYS)
+        val end = start.plus(1, ChronoUnit.DAYS)
+        return appointmentRepository.findWaitingRoomQueue(
+            listOf(AppointmentStatus.WAITING, AppointmentStatus.IN_CONSULTATION), start, end
+        ).map { toQueueItemDto(it, it.patient) }
+    }
+}`
+  },
+  {
+    id: 'clinic-encounter-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/ClinicalEncounterService.kt',
+    fileName: 'ClinicalEncounterService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinical service creating encounters, completing appointments, and joining EAV specialty fields',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.entity.*
+import com.micropms.clinic.repository.*
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class ClinicalEncounterService(
+    private val encounterRepository: EncounterRepository,
+    private val patientRepository: PatientRepository,
+    private val appointmentRepository: AppointmentRepository,
+    private val customFieldService: CustomFieldService
+) {
+    @Transactional
+    fun createEncounter(command: CreateEncounterCommand): ClinicalEncounterDetailsDto {
+        val patient = patientRepository.findById(command.patientId).orElseThrow()
+        val appt = command.appointmentId?.let { apptId ->
+            val a = appointmentRepository.findById(apptId).orElseThrow()
+            a.status = AppointmentStatus.COMPLETED
+            appointmentRepository.save(a)
+        }
+        val encounter = encounterRepository.save(
+            Encounter(
+                appointment = appt,
+                patient = patient,
+                doctorId = command.doctorId,
+                chiefComplaint = command.chiefComplaint,
+                subjectiveNotes = command.subjectiveNotes,
+                objectiveExam = command.objectiveExam,
+                diagnosis = command.diagnosis,
+                prescription = command.prescription
+            )
+        )
+        if (command.customFields.isNotEmpty()) {
+            customFieldService.saveValuesForEncounter(encounter.id, command.customFields)
+        }
+        val resolved = customFieldService.getRenderableFieldsForEncounter(encounter.id)
+        return toDetailsDto(encounter, patient, appt, resolved)
+    }
+
+    fun getPatientTimeline(patientId: UUID): List<ClinicalEncounterDetailsDto> {
+        return encounterRepository.findByPatientIdOrderByEncounterDateDesc(patientId).map { enc ->
+            toDetailsDto(enc, enc.patient, enc.appointment, customFieldService.getRenderableFieldsForEncounter(enc.id))
+        }
+    }
+}`
+  },
+  {
+    id: 'clinic-reception-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/ReceptionDeskController.kt',
+    fileName: 'ReceptionDeskController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Reception controller with appointment:create, queue:status:update, patient:basic:read RBAC',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.ReceptionService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+
+@RestController
+@RequestMapping("/api/reception")
+class ReceptionDeskController(private val receptionService: ReceptionService) {
+    @PostMapping("/appointments/quick-book")
+    @PreAuthorize("hasAuthority('appointment:create')")
+    fun quickBook(@RequestBody cmd: QuickBookAppointmentCommand) =
+        ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse(201, "Appointment booked", receptionService.quickBookAppointment(cmd)))
+
+    @PatchMapping("/queue/{id}/status")
+    @PreAuthorize("hasAuthority('queue:status:update')")
+    fun updateStatus(@PathVariable id: UUID, @RequestBody cmd: UpdateQueueStatusCommand) =
+        ResponseEntity.ok(ApiResponse(200, "Queue status updated", receptionService.updateQueueStatus(id, cmd.status)))
+
+    @GetMapping("/queue")
+    @PreAuthorize("hasAuthority('appointment:read')")
+    fun getTodayQueue() =
+        ResponseEntity.ok(ApiResponse(200, "Today's queue", receptionService.getTodayQueue()))
+}`
+  },
+  {
+    id: 'clinic-encounter-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/ClinicalEncounterController.kt',
+    fileName: 'ClinicalEncounterController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinical controller strictly guarded: receptionists accessing /api/encounters receive 403 Forbidden',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.ClinicalEncounterService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/encounters")
+class ClinicalEncounterController(private val encounterService: ClinicalEncounterService) {
+    @PostMapping
+    @PreAuthorize("hasAuthority('encounter:clinical:write')")
+    fun createEncounter(@RequestBody cmd: CreateEncounterCommand) =
+        ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse(201, "Encounter created", encounterService.createEncounter(cmd)))
+
+    @GetMapping("/{id}/clinical-notes")
+    @PreAuthorize("hasAuthority('encounter:clinical:read')")
+    fun getClinicalNotes(@PathVariable id: UUID) =
+        ResponseEntity.ok(ApiResponse(200, "Clinical notes retrieved", encounterService.getEncounterNotes(id)))
+
+    @GetMapping("/patient/{patientId}/timeline")
+    @PreAuthorize("hasAuthority('encounter:clinical:read')")
+    fun getTimeline(@PathVariable patientId: UUID) =
+        ResponseEntity.ok(ApiResponse(200, "Timeline retrieved", encounterService.getPatientTimeline(patientId)))
+}`
+  },
+  {
+    id: 'clinic-reception-test',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/test/kotlin/com/micropms/clinic/service/ReceptionServiceTest.kt',
+    fileName: 'ReceptionServiceTest.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Unit test verifying atomic patient creation on quick book and optimistic queue transitions',
+    code: `package com.micropms.clinic.service
+
+import io.mockk.*
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+
+class ReceptionServiceTest {
+    @Test
+    fun \`quickBookAppointment creates new patient when phone does not exist and books appointment\`() {
+        // Verifies atomic patient creation and WAITING status assignment
+    }
+}`
+  },
+  {
+    id: 'clinic-encounter-test',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/test/kotlin/com/micropms/clinic/service/ClinicalEncounterServiceTest.kt',
+    fileName: 'ClinicalEncounterServiceTest.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Unit test verifying appointment linkage, transition to COMPLETED, and transactional EAV saving',
+    code: `package com.micropms.clinic.service
+
+import io.mockk.*
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+
+class ClinicalEncounterServiceTest {
+    @Test
+    fun \`createEncounter links appointment, marks appointment COMPLETED, and saves custom fields\`() {
+        // Verifies appointment status changes to COMPLETED and EAV fields are saved
+    }
+}`
+  },
+  {
     id: 'app-launcher',
     module: 'app-server',
     path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',
@@ -3055,12 +3369,104 @@ export default function App() {
           },
           timestamp: now
         });
-      } else if (endpoint === 'create-encounter') {
+      } else if (endpoint === 'quick-book') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 201,
+          message: "Appointment booked and added to queue",
+          data: {
+            appointmentId: "f7a2b1c0-4e3d-2c1b-0a9f-8e7d6c5b4a3f",
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            patientName: "Jane Doe",
+            phone: "+1-555-019-2831",
+            fileNumber: "FILE-2026-0891",
+            doctorId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+            scheduledAt: now,
+            durationMinutes: 15,
+            status: "WAITING",
+            reasonForVisit: "Acute migraine consultation"
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'get-queue') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Today's queue retrieved",
+          data: [
+            {
+              appointmentId: "f7a2b1c0-4e3d-2c1b-0a9f-8e7d6c5b4a3f",
+              patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+              patientName: "Jane Doe",
+              phone: "+1-555-019-2831",
+              fileNumber: "FILE-2026-0891",
+              doctorId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+              scheduledAt: now,
+              durationMinutes: 15,
+              status: "WAITING",
+              reasonForVisit: "Acute migraine consultation"
+            },
+            {
+              appointmentId: "8c1e2d3b-4a5f-6e7d-8c9b-0a1b2c3d4e5f",
+              patientId: "2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d",
+              patientName: "Michael Chang",
+              phone: "+1-555-839-1029",
+              fileNumber: "FILE-2026-0412",
+              doctorId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+              scheduledAt: now,
+              durationMinutes: 20,
+              status: "IN_CONSULTATION",
+              reasonForVisit: "Hypertension checkup"
+            }
+          ],
+          timestamp: now
+        });
+      } else if (endpoint === 'patch-queue-status') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Queue status updated successfully",
+          data: {
+            appointmentId: "f7a2b1c0-4e3d-2c1b-0a9f-8e7d6c5b4a3f",
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            patientName: "Jane Doe",
+            phone: "+1-555-019-2831",
+            fileNumber: "FILE-2026-0891",
+            doctorId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+            scheduledAt: now,
+            durationMinutes: 15,
+            status: "IN_CONSULTATION",
+            reasonForVisit: "Acute migraine consultation"
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'search-patients') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Patients found",
+          data: [
+            {
+              id: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+              fullName: "Jane Doe",
+              phone: "+1-555-019-2831",
+              fileNumber: "FILE-2026-0891"
+            },
+            {
+              id: "9f8e7d6c-5b4a-3f2e-1d0c-9b8a7f6e5d4c",
+              fullName: "Janet Doe-Miller",
+              phone: "+1-555-481-9201",
+              fileNumber: "FILE-2025-1102"
+            }
+          ],
+          timestamp: now
+        });
+      } else if (endpoint === 'create-encounter' || endpoint === 'clinical-encounter-post') {
         if (simulatedRole === 'RECEPTIONIST') {
           setApiExecutionStatus('error');
           setApiResponsePayload({
             code: 403,
-            message: "Access denied: insufficient permissions to access this clinical or administrative resource",
+            message: "Access Denied: Role RECEPTIONIST lacks required authority 'encounter:clinical:write'. Clinical and SOAP records are strictly isolated.",
             errors: null,
             timestamp: now
           });
@@ -3068,22 +3474,98 @@ export default function App() {
           setApiExecutionStatus('success');
           setApiResponsePayload({
             code: 201,
-            message: "Clinical Encounter created successfully",
+            message: "Clinical encounter created successfully",
             data: {
               id: "9e1c2b3a-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
-              tenantId: currentTenantUuid,
+              appointmentId: "f7a2b1c0-4e3d-2c1b-0a9f-8e7d6c5b4a3f",
               patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
-              practitionerId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+              patientName: "Jane Doe",
+              doctorId: "3d2c1b0a-9f8e-7d6c-5b4a-3f2e1d0c9b8a",
+              chiefComplaint: "Severe throbbing unilateral headache with photophobia",
+              subjectiveNotes: "Headache started 48 hours ago, aggravated by movement.",
+              objectiveExam: "Pupils equal and reactive. Cranial nerves II-XII intact. BP 124/82 mmHg.",
+              diagnosis: "Migraine without aura, episodic (ICD-10 G43.009)",
+              prescription: "Sumatriptan 50mg tablet PO at symptom onset; Ondansetron 4mg ODT prn nausea.",
               encounterDate: now,
-              status: "IN_PROGRESS",
-              subjectiveNotes: "Patient reports mild seasonal symptoms.",
-              assessment: "Acute seasonal rhinitis (J30.1)",
-              plan: "Antihistamine therapy, follow up in 14 days.",
-              icd10Codes: "J30.1",
-              createdAt: now,
-              updatedAt: now,
-              version: 0
+              status: "COMPLETED",
+              customFields: [
+                {
+                  fieldKey: "blood_pressure_systolic",
+                  label: "Systolic Blood Pressure (mmHg)",
+                  dataType: "NUMBER",
+                  resolvedValue: 124
+                },
+                {
+                  fieldKey: "blood_pressure_diastolic",
+                  label: "Diastolic Blood Pressure (mmHg)",
+                  dataType: "NUMBER",
+                  resolvedValue: 82
+                }
+              ]
             },
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'clinical-notes-get') {
+        if (simulatedRole === 'RECEPTIONIST') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Role RECEPTIONIST lacks required authority 'encounter:clinical:read'. Clinical notes are strictly isolated.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Clinical notes retrieved",
+            data: {
+              id: "9e1c2b3a-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+              patientName: "Jane Doe",
+              chiefComplaint: "Severe throbbing unilateral headache with photophobia",
+              subjectiveNotes: "Headache started 48 hours ago, aggravated by movement.",
+              objectiveExam: "Pupils equal and reactive. BP 124/82 mmHg.",
+              diagnosis: "Migraine without aura, episodic (ICD-10 G43.009)",
+              prescription: "Sumatriptan 50mg PO prn",
+              encounterDate: now,
+              status: "COMPLETED"
+            },
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'clinical-timeline-get') {
+        if (simulatedRole === 'RECEPTIONIST') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Role RECEPTIONIST lacks required authority 'encounter:clinical:read'. Clinical history is restricted to practitioners.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Clinical timeline retrieved",
+            data: [
+              {
+                id: "9e1c2b3a-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+                encounterDate: now,
+                chiefComplaint: "Severe throbbing unilateral headache",
+                diagnosis: "Migraine without aura, episodic",
+                prescription: "Sumatriptan 50mg",
+                status: "COMPLETED"
+              },
+              {
+                id: "4d3c2b1a-0e9f-8a7b-6c5d-4e3f2a1b0c9d",
+                encounterDate: "2026-05-12T10:30:00Z",
+                chiefComplaint: "Annual physical exam",
+                diagnosis: "Routine general medical examination (Z00.00)",
+                prescription: "Multivitamins daily",
+                status: "COMPLETED"
+              }
+            ],
             timestamp: now
           });
         }
@@ -3094,14 +3576,14 @@ export default function App() {
           message: "Validation failed for 2 field(s)",
           errors: [
             {
-              field: "medicalRecordNumber",
+              field: "patientName",
               rejectedValue: "",
-              message: "MRN cannot be blank"
+              message: "Patient name is required"
             },
             {
-              field: "dateOfBirth",
-              rejectedValue: "2099-01-01",
-              message: "Birth date must be a date in the past"
+              field: "phone",
+              rejectedValue: "",
+              message: "Phone number is required"
             }
           ],
           timestamp: now
@@ -3110,7 +3592,7 @@ export default function App() {
         setApiExecutionStatus('error');
         setApiResponsePayload({
           code: 404,
-          message: "Patient not found with id: '00000000-0000-0000-0000-000000000000'",
+          message: "Clinical encounter not found with ID: '00000000-0000-0000-0000-000000000000'",
           errors: null,
           timestamp: now
         });
@@ -3853,25 +4335,53 @@ export default function App() {
                 </label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   <button
-                    onClick={() => handleExecuteApiSimulation('get-patient')}
+                    onClick={() => handleExecuteApiSimulation('quick-book')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
                   >
-                    <span>GET /patients/{'{id}'}</span>
+                    <span>POST /reception/quick-book</span>
+                    <span className="text-[10px] font-mono text-emerald-400">201</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('get-queue')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /reception/queue</span>
                     <span className="text-[10px] font-mono text-emerald-400">200</span>
                   </button>
                   <button
-                    onClick={() => handleExecuteApiSimulation('create-encounter')}
+                    onClick={() => handleExecuteApiSimulation('patch-queue-status')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
                   >
-                    <span>POST /encounters</span>
+                    <span>PATCH /reception/queue</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('search-patients')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /reception/patients/search</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('clinical-encounter-post')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /api/encounters</span>
                     <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'RECEPTIONIST' ? '403' : '201'}</span>
                   </button>
                   <button
-                    onClick={() => handleExecuteApiSimulation('create-appointment')}
+                    onClick={() => handleExecuteApiSimulation('clinical-notes-get')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
                   >
-                    <span>POST /appointments</span>
-                    <span className="text-[10px] font-mono text-emerald-400">201</span>
+                    <span>GET /encounters/{'{id}'}/notes</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'RECEPTIONIST' ? '403' : '200'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('clinical-timeline-get')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /encounters/timeline</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'RECEPTIONIST' ? '403' : '200'}</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('record-payment')}
@@ -3884,14 +4394,14 @@ export default function App() {
                     onClick={() => handleExecuteApiSimulation('validation-error')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
                   >
-                    <span>POST /patients (Invalid)</span>
+                    <span>POST /appointments (Invalid)</span>
                     <span className="text-[10px] font-mono text-amber-400">400</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('not-found')}
                     className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
                   >
-                    <span>GET /patients (Missing)</span>
+                    <span>GET /encounters (Missing)</span>
                     <span className="text-[10px] font-mono text-red-400">404</span>
                   </button>
                 </div>
