@@ -6,17 +6,30 @@ import org.springframework.security.oauth2.jwt.Jwt
 import java.util.UUID
 
 /**
- * Immutable domain principal encapsulating the authenticated tenant user.
+ * Discriminator distinguishing Platform Super Administrators (Control Plane)
+ * from Clinic Staff Users (Application Plane).
+ */
+enum class AuthUserType {
+    PLATFORM_ADMIN,
+    TENANT_USER
+}
+
+/**
+ * Domain principal encapsulating the authenticated user identity,
+ * user type (PLATFORM_ADMIN vs TENANT_USER), and tenant identifier if scoped.
  */
 data class TenantUserPrincipal(
     val userId: UUID,
-    val tenantId: UUID,
+    val tenantId: UUID? = null,
     val email: String? = null,
-    val username: String? = null
-)
+    val username: String? = null,
+    val userType: AuthUserType = AuthUserType.TENANT_USER
+) {
+    val isPlatformAdmin: Boolean get() = userType == AuthUserType.PLATFORM_ADMIN
+}
 
 /**
- * Spring Security authentication token holding verified user credentials,
+ * Spring Security authentication token holding verified credentials,
  * the decoded JWT, fine-grained RBAC authorities, and the isolated tenant identifier.
  */
 class TenantAuthenticationToken(
@@ -30,7 +43,8 @@ class TenantAuthenticationToken(
     }
 
     val userId: UUID get() = principal.userId
-    val tenantId: UUID get() = principal.tenantId
+    val tenantId: UUID? get() = principal.tenantId
+    val isPlatformAdmin: Boolean get() = principal.isPlatformAdmin
 
     override fun getCredentials(): Any = jwt
 
@@ -39,6 +53,6 @@ class TenantAuthenticationToken(
     override fun getName(): String = principal.userId.toString()
 
     override fun toString(): String {
-        return "TenantAuthenticationToken(userId=${principal.userId}, tenantId=${principal.tenantId}, authorities=$authorities)"
+        return "TenantAuthenticationToken(userId=${principal.userId}, tenantId=${principal.tenantId}, userType=${principal.userType}, authorities=$authorities)"
     }
 }

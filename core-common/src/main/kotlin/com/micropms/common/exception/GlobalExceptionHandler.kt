@@ -106,6 +106,23 @@ class GlobalExceptionHandler {
     }
 
     /**
+     * Handles subscription quota limit violations (e.g. max doctors exceeded).
+     */
+    @ExceptionHandler(QuotaExceededException::class)
+    fun handleQuotaExceeded(
+        ex: QuotaExceededException
+    ): ResponseEntity<ApiErrorResponse> {
+        log.warn("Subscription quota violation: {}", ex.message)
+        val response = ApiErrorResponse(
+            code = HttpStatus.UNPROCESSABLE_ENTITY.value(),
+            message = ex.message ?: "Subscription plan quota exceeded",
+            errors = null,
+            timestamp = Instant.now()
+        )
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(response)
+    }
+
+    /**
      * Handles illegal argument and invalid state transitions.
      */
     @ExceptionHandler(IllegalArgumentException::class, IllegalStateException::class)

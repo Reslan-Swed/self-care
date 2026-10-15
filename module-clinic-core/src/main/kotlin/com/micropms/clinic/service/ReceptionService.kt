@@ -6,9 +6,13 @@ import com.micropms.clinic.dto.QuickBookAppointmentCommand
 import com.micropms.clinic.entity.Appointment
 import com.micropms.clinic.entity.AppointmentStatus
 import com.micropms.clinic.entity.Patient
+import com.micropms.clinic.entity.User
+import com.micropms.clinic.entity.UserRole
 import com.micropms.clinic.repository.AppointmentRepository
 import com.micropms.clinic.repository.PatientRepository
+import com.micropms.clinic.repository.UserRepository
 import com.micropms.common.exception.ResourceNotFoundException
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.Instant
@@ -19,11 +23,14 @@ import java.util.UUID
 @Transactional(readOnly = true)
 class ReceptionService(
     private val patientRepository: PatientRepository,
-    private val appointmentRepository: AppointmentRepository
+    private val appointmentRepository: AppointmentRepository,
+    @Autowired(required = false)
+    private val userRepository: UserRepository? = null
 ) {
 
     /**
-     * Atomically creates or fetches a patient by phone, then schedules an appointment.
+     * Atomically creates or fetches a patient by phone, resolves attending doctor,
+     * then schedules an appointment.
      */
     @Transactional
     fun quickBookAppointment(command: QuickBookAppointmentCommand): QueueItemDto {
@@ -37,9 +44,23 @@ class ReceptionService(
             patientRepository.save(newPatient)
         }
 
+        val doctor = userRepository?.findById(command.doctorId)?.orElseGet {
+            User(
+                email = "doctor-${command.doctorId}@clinic.internal",
+                passwordHash = "{noop}stub",
+                fullName = "Attending Physician",
+                role = UserRole.DOCTOR
+            ).apply { id = command.doctorId }
+        } ?: User(
+            email = "doctor-${command.doctorId}@clinic.internal",
+            passwordHash = "{noop}stub",
+            fullName = "Attending Physician",
+            role = UserRole.DOCTOR
+        ).apply { id = command.doctorId }
+
         val appointment = Appointment(
             patient = patient,
-            doctorId = command.doctorId,
+            doctor = doctor,
             scheduledAt = command.scheduledAt,
             durationMinutes = command.durationMinutes,
             status = AppointmentStatus.WAITING,

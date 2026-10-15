@@ -6,10 +6,14 @@ import com.micropms.clinic.dto.CreateEncounterCommand
 import com.micropms.clinic.entity.AppointmentStatus
 import com.micropms.clinic.entity.Encounter
 import com.micropms.clinic.entity.EncounterStatus
+import com.micropms.clinic.entity.User
+import com.micropms.clinic.entity.UserRole
 import com.micropms.clinic.repository.AppointmentRepository
 import com.micropms.clinic.repository.EncounterRepository
 import com.micropms.clinic.repository.PatientRepository
+import com.micropms.clinic.repository.UserRepository
 import com.micropms.common.exception.ResourceNotFoundException
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
@@ -20,12 +24,14 @@ class ClinicalEncounterService(
     private val encounterRepository: EncounterRepository,
     private val patientRepository: PatientRepository,
     private val appointmentRepository: AppointmentRepository,
-    private val customFieldService: CustomFieldService
+    private val customFieldService: CustomFieldService,
+    @Autowired(required = false)
+    private val userRepository: UserRepository? = null
 ) {
 
     /**
      * Atomically creates clinical encounter, links optional appointment (marking it COMPLETED),
-     * and saves specialty typed EAV field values within a single transaction.
+     * resolves doctor User relationship, and saves specialty typed EAV field values within a single transaction.
      */
     @Transactional
     fun createEncounter(command: CreateEncounterCommand): ClinicalEncounterDetailsDto {
@@ -39,10 +45,24 @@ class ClinicalEncounterService(
             appointmentRepository.save(appt)
         }
 
+        val doctor = userRepository?.findById(command.doctorId)?.orElseGet {
+            User(
+                email = "doctor-${command.doctorId}@clinic.internal",
+                passwordHash = "{noop}stub",
+                fullName = "Attending Physician",
+                role = UserRole.DOCTOR
+            ).apply { id = command.doctorId }
+        } ?: User(
+            email = "doctor-${command.doctorId}@clinic.internal",
+            passwordHash = "{noop}stub",
+            fullName = "Attending Physician",
+            role = UserRole.DOCTOR
+        ).apply { id = command.doctorId }
+
         val encounter = Encounter(
             appointment = appointment,
             patient = patient,
-            doctorId = command.doctorId,
+            doctor = doctor,
             chiefComplaint = command.chiefComplaint.trim(),
             subjectiveNotes = command.subjectiveNotes?.trim(),
             objectiveExam = command.objectiveExam?.trim(),

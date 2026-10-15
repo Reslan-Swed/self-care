@@ -1,11 +1,15 @@
 package com.micropms.clinic.controller
 
-import com.micropms.common.controller.BaseController
 import com.micropms.clinic.entity.Appointment
 import com.micropms.clinic.entity.AppointmentStatus
+import com.micropms.clinic.entity.User
+import com.micropms.clinic.entity.UserRole
 import com.micropms.clinic.repository.AppointmentRepository
 import com.micropms.clinic.repository.PatientRepository
+import com.micropms.clinic.repository.UserRepository
+import com.micropms.common.controller.BaseController
 import jakarta.validation.constraints.NotNull
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.security.access.prepost.PreAuthorize
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.bind.annotation.RequestMapping
@@ -55,7 +59,9 @@ data class AppointmentResponseDto(
 @PreAuthorize("hasAuthority('APPOINTMENT_READ') or hasAuthority('ROLE_RECEPTIONIST') or hasAuthority('ROLE_DOCTOR')")
 class AppointmentController(
     appointmentRepository: AppointmentRepository,
-    private val patientRepository: PatientRepository
+    private val patientRepository: PatientRepository,
+    @Autowired(required = false)
+    private val userRepository: UserRepository? = null
 ) : BaseController<Appointment, UUID, AppointmentForm, AppointmentResponseDto>(
     repository = appointmentRepository,
     resourceName = "Appointment"
@@ -82,9 +88,23 @@ class AppointmentController(
 
         val duration = Duration.between(form.scheduledStart, form.scheduledEnd).toMinutes().toInt().coerceAtLeast(5)
 
+        val doctor = userRepository?.findById(form.practitionerId)?.orElseGet {
+            User(
+                email = "doctor-${form.practitionerId}@clinic.internal",
+                passwordHash = "{noop}stub",
+                fullName = "Practitioner",
+                role = UserRole.DOCTOR
+            ).apply { id = form.practitionerId }
+        } ?: User(
+            email = "doctor-${form.practitionerId}@clinic.internal",
+            passwordHash = "{noop}stub",
+            fullName = "Practitioner",
+            role = UserRole.DOCTOR
+        ).apply { id = form.practitionerId }
+
         val appt = Appointment(
             patient = patient,
-            doctorId = form.practitionerId,
+            doctor = doctor,
             scheduledAt = form.scheduledStart,
             durationMinutes = duration,
             status = form.status,

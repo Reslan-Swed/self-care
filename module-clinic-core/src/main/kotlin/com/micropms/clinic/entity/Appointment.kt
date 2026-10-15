@@ -25,7 +25,7 @@ enum class AppointmentStatus {
 /**
  * Application Plane entity representing an appointment scheduled with a practitioner.
  * Extends BaseTenantEntity to enforce tenant scoping and PostgreSQL RLS.
- * Accessible to administrative and reception staff as well as clinicians.
+ * Links to User via explicit JPA relationship @ManyToOne doctor.
  */
 @Entity
 @Table(name = "clinic_appointments")
@@ -34,8 +34,9 @@ class Appointment(
     @JoinColumn(name = "patient_id", nullable = false)
     var patient: Patient,
 
-    @Column(name = "doctor_id", nullable = false)
-    var doctorId: UUID,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "doctor_id", nullable = false)
+    var doctor: User,
 
     @Column(name = "scheduled_at", nullable = false)
     var scheduledAt: Instant,
@@ -51,14 +52,41 @@ class Appointment(
     var reasonForVisit: String? = null
 ) : BaseTenantEntity() {
 
+    // Overloaded secondary constructor for convenience and backwards-compatibility
+    constructor(
+        patient: Patient,
+        doctorId: UUID,
+        scheduledAt: Instant,
+        durationMinutes: Int = 15,
+        status: AppointmentStatus = AppointmentStatus.SCHEDULED,
+        reasonForVisit: String? = null
+    ) : this(
+        patient = patient,
+        doctor = User(
+            email = "doctor-$doctorId@clinic.internal",
+            passwordHash = "{noop}stub",
+            fullName = "Doctor",
+            role = UserRole.DOCTOR
+        ).apply { id = doctorId },
+        scheduledAt = scheduledAt,
+        durationMinutes = durationMinutes,
+        status = status,
+        reasonForVisit = reasonForVisit
+    )
+
+    // Doctor ID accessor matching doctor relationship
+    var doctorId: UUID
+        get() = doctor.id
+        set(_) {}
+
     // Compatibility properties
     var patientId: UUID
         get() = patient.id
         set(_) {}
 
     var practitionerId: UUID
-        get() = doctorId
-        set(value) { doctorId = value }
+        get() = doctor.id
+        set(_) {}
 
     var scheduledStart: Instant
         get() = scheduledAt

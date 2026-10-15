@@ -2,9 +2,11 @@ package com.micropms.saas.service
 
 import com.micropms.common.exception.ResourceNotFoundException
 import com.micropms.saas.entity.AuditImpersonationLog
+import com.micropms.saas.entity.PlatformAdmin
 import com.micropms.saas.entity.TenantStatus
 import com.micropms.saas.exception.UnauthorizedImpersonationException
 import com.micropms.saas.repository.AuditImpersonationLogRepository
+import com.micropms.saas.repository.PlatformAdminRepository
 import com.micropms.saas.repository.TenantRepository
 import io.jsonwebtoken.Jwts
 import io.jsonwebtoken.security.Keys
@@ -29,12 +31,13 @@ data class ImpersonationTokenDetails(
 
 /**
  * Service managing highly privileged support impersonation sessions.
- * Allows super-administrators to troubleshoot clinic-level issues under strict audit logging
- * and short-lived temporal token boundaries.
+ * Allows verified PlatformAdmin super-administrators to troubleshoot clinic-level issues
+ * under strict audit logging and short-lived temporal token boundaries.
  */
 @Service
 class ImpersonationService(
     private val tenantRepository: TenantRepository,
+    private val platformAdminRepository: PlatformAdminRepository,
     private val auditLogRepository: AuditImpersonationLogRepository,
     @Value("\${micropms.jwt.secret:default-secret-key-must-be-at-least-256-bits-long-for-hmac-sha256}")
     private val jwtSecretKey: String
@@ -48,8 +51,9 @@ class ImpersonationService(
 
     /**
      * Issues a cryptographically signed, short-lived JWT token enabling support staff
-     * to access a clinic tenant. Enforces caller authorization, verifies tenant existence,
-     * injects impersonation claims, and immutably records the action in AuditImpersonationLog.
+     * to access a clinic tenant. Enforces caller authorization, verifies admin existence
+     * in platform_admins, verifies tenant existence, injects impersonation claims,
+     * and immutably records the action in AuditImpersonationLog.
      */
     @Transactional
     fun issueImpersonationToken(
@@ -67,11 +71,21 @@ class ImpersonationService(
         } ?: false
 
         if (!isSuperAdmin) {
-            log.error("Unauthorized impersonation attempt by user {} against tenant {}", adminId, tenantId)
+            log.error("Unauthorized impersonation attempt by admin {} against tenant {}", adminId, tenantId)
             throw UnauthorizedImpersonationException("User lacks required 'platform:impersonate:tenant' or 'ROLE_SUPER_ADMIN' authority")
         }
 
-        // 2. Validate justification and IP address
+        // 2. Validate that adminId belongs to an active PlatformAdmin
+        val platformAdmin: PlatformAdmin = platformAdminRepository.findById(adminId).orElseThrow {
+            ResourceNotFoundException("PlatformAdmin not found with ID: $adminId")
+        }
+
+        if (!platformAdmin.isActive) {
+            log.error("Impersonation denied: PlatformAdmin {} is deactivated", adminId)
+            throw UnauthorizedImpersonationException("Platform administrator account $adminId is inactive")
+        }
+
+        // 3. Validate justification and IP address
         require(justification.trim().length >= 10) {
             "Impersonation justification must be at least 10 characters detailing the support ticket or reason"
         }
@@ -79,9 +93,9 @@ class ImpersonationService(
             "Client IP address is required for regulatory audit trails"
         }
 
-        // 3. Verify target clinic exists
+        // 4. Verify target clinic exists
         val tenant = tenantRepository.findById(tenantId).orElseThrow {
-            ResourceNotFoundException("Tenant", "id", tenantId)
+            ResourceNotFoundException("Tenant not found with ID: $tenantId")
         }
 
         if (tenant.status == TenantStatus.SUSPENDED) {
@@ -91,13 +105,14 @@ class ImpersonationService(
         val now = Instant.now()
         val expiresAt = now.plus(IMPERSONATION_TOKEN_TTL)
 
-        // 4. Generate cryptographically signed, short-lived JWT
+        // 5. Generate cryptographically signed, short-lived JWT
         val signingKey = Keys.hmacShaKeyFor(jwtSecretKey.toByteArray(StandardCharsets.UTF_8))
         val token = Jwts.builder()
             .header().add("typ", "JWT").and()
             .subject(adminId.toString())
             .claim("tenant_id", tenantId.toString())
             .claim("tenant_slug", tenant.slug)
+            .claim("user_type", "TENANT_USER")
             .claim("is_impersonated", true)
             .claim("impersonator_admin_id", adminId.toString())
             .claim("role", "SUPER_ADMIN")
@@ -117,7 +132,7 @@ class ImpersonationService(
             .signWith(signingKey)
             .compact()
 
-        // 5. Immutably record audit entry in database
+        // 6. Immutably record audit entry in database
         val auditEntry = AuditImpersonationLog(
             adminId = adminId,
             tenantId = tenantId,
@@ -127,8 +142,8 @@ class ImpersonationService(
         )
         auditLogRepository.save(auditEntry)
 
-        log.info("ISSUED IMPERSONATION SESSION: Admin {} -> Tenant '{}' ({}) until {}. IP: {}",
-            adminId, tenant.name, tenantId, expiresAt, ipAddress)
+        log.info("ISSUED IMPERSONATION SESSION: Admin {} ({}) -> Tenant '{}' ({}) until {}. IP: {}",
+            adminId, platformAdmin.email, tenant.name, tenantId, expiresAt, ipAddress)
 
         return ImpersonationTokenDetails(
             token = token,

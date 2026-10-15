@@ -3080,6 +3080,202 @@ class ClinicalEncounterServiceTest {
 }`
   },
   {
+    id: 'saas-platform-admin',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/entity/PlatformAdmin.kt',
+    fileName: 'PlatformAdmin.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane entity representing super-administrators extending BaseAuditEntity (NO tenant_id)',
+    code: `package com.micropms.saas.entity
+
+import com.micropms.common.entity.BaseAuditEntity
+import jakarta.persistence.*
+
+enum class PlatformRole { SUPER_ADMIN, SUPPORT_AGENT }
+
+@Entity
+@Table(name = "platform_admins", indexes = [Index(name = "idx_platform_admins_email", columnList = "email", unique = true)])
+class PlatformAdmin(
+    @Column(name = "email", nullable = false, unique = true) var email: String,
+    @Column(name = "password_hash", nullable = false) var passwordHash: String,
+    @Column(name = "full_name", nullable = false) var fullName: String,
+    @Enumerated(EnumType.STRING) @Column(name = "role", nullable = false) var role: PlatformRole = PlatformRole.SUPER_ADMIN,
+    @Column(name = "is_active", nullable = false) var isActive: Boolean = true
+) : BaseAuditEntity()`
+  },
+  {
+    id: 'saas-platform-admin-repo',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/repository/PlatformAdminRepository.kt',
+    fileName: 'PlatformAdminRepository.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Repository for platform super admins providing email lookups and existence verification',
+    code: `package com.micropms.saas.repository
+
+import com.micropms.common.repository.BaseRepository
+import com.micropms.saas.entity.PlatformAdmin
+import org.springframework.stereotype.Repository
+import java.util.Optional
+import java.util.UUID
+
+@Repository
+interface PlatformAdminRepository : BaseRepository<PlatformAdmin, UUID> {
+    fun findByEmail(email: String): Optional<PlatformAdmin>
+    fun existsByEmail(email: String): Boolean
+}`
+  },
+  {
+    id: 'clinic-user-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/User.kt',
+    fileName: 'User.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Application Plane entity representing clinic staff (Doctors, Receptionists) extending BaseTenantEntity',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.*
+
+enum class UserRole { CLINIC_ADMIN, DOCTOR, RECEPTIONIST }
+
+@Entity
+@Table(name = "users", uniqueConstraints = [UniqueConstraint(name = "uq_users_tenant_email", columnNames = ["tenant_id", "email"])])
+class User(
+    @Column(name = "email", nullable = false) var email: String,
+    @Column(name = "password_hash", nullable = false) var passwordHash: String,
+    @Column(name = "full_name", nullable = false) var fullName: String,
+    @Column(name = "phone") var phone: String? = null,
+    @Enumerated(EnumType.STRING) @Column(name = "role", nullable = false) var role: UserRole = UserRole.DOCTOR,
+    @Column(name = "specialty") var specialty: String? = null,
+    @Column(name = "license_number") var licenseNumber: String? = null,
+    @Column(name = "is_active", nullable = false) var isActive: Boolean = true
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-user-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/UserService.kt',
+    fileName: 'UserService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinic staff user service enforcing doctor quotas against SaaS subscriptions and soft-deactivation',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.entity.*
+import com.micropms.clinic.repository.UserRepository
+import com.micropms.common.quota.DoctorQuotaValidator
+import com.micropms.multitenancy.context.TenantContext
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class UserService(
+    private val userRepository: UserRepository,
+    private val doctorQuotaValidator: DoctorQuotaValidator? = null
+) {
+    @Transactional
+    fun createClinicUser(request: CreateClinicUserRequest): ClinicUserResponseDto {
+        val tenantId = TenantContext.requireTenantId()
+        if (request.role == UserRole.DOCTOR) {
+            val currentDoctors = userRepository.countByRoleAndIsActiveTrue(UserRole.DOCTOR)
+            doctorQuotaValidator?.validateDoctorQuota(tenantId, currentDoctors)
+        }
+        val user = User(
+            email = request.email.trim().lowercase(),
+            passwordHash = "{noop}\${request.password}",
+            fullName = request.fullName.trim(),
+            role = request.role,
+            specialty = request.specialty,
+            licenseNumber = request.licenseNumber
+        )
+        return toDto(userRepository.save(user))
+    }
+
+    @Transactional
+    fun deactivateUser(userId: UUID): ClinicUserResponseDto {
+        val user = userRepository.findById(userId).orElseThrow()
+        user.isActive = false
+        return toDto(userRepository.save(user))
+    }
+}`
+  },
+  {
+    id: 'clinic-user-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/UserController.kt',
+    fileName: 'UserController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinic user management controller protected with fine-grained RBAC clinic:users:manage',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.UserService
+import com.micropms.common.dto.ApiResponse
+import jakarta.validation.Valid
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/clinic/users")
+class UserController(private val userService: UserService) {
+    @PostMapping
+    @PreAuthorize("hasAuthority('clinic:users:manage')")
+    fun createClinicUser(@Valid @RequestBody request: CreateClinicUserRequest) =
+        ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse(201, "User created", userService.createClinicUser(request)))
+
+    @PatchMapping("/{id}/deactivate")
+    @PreAuthorize("hasAuthority('clinic:users:manage')")
+    fun deactivateUser(@PathVariable id: UUID) =
+        ResponseEntity.ok(ApiResponse(200, "User deactivated", userService.deactivateUser(id)))
+}`
+  },
+  {
+    id: 'migration-v2-users',
+    module: 'app-server',
+    path: '/app-server/src/main/resources/db/migration/V2__refactor_users_and_relationships.sql',
+    fileName: 'V2__refactor_users_and_relationships.sql',
+    language: 'sql',
+    category: 'config',
+    description: 'Flyway migration creating platform_admins (no tenant_id), users with RLS, and doctor_id foreign keys',
+    code: `-- V2: Refactor Users and Explicit Foreign Key Relationships
+CREATE TABLE platform_admins (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'SUPER_ADMIN',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+    email VARCHAR(255) NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'DOCTOR',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    CONSTRAINT uq_users_tenant_email UNIQUE (tenant_id, email)
+);
+
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_users_isolation ON users FOR ALL USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+
+ALTER TABLE clinic_appointments ADD CONSTRAINT fk_appointments_doctor FOREIGN KEY (doctor_id) REFERENCES users(id);
+ALTER TABLE clinic_encounters ADD CONSTRAINT fk_encounters_doctor FOREIGN KEY (doctor_id) REFERENCES users(id);`
+  },
+  {
     id: 'app-launcher',
     module: 'app-server',
     path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',

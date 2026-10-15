@@ -23,6 +23,7 @@ enum class EncounterStatus {
 /**
  * Confidential clinical encounter entity holding SOAP notes and diagnostic data.
  * Isolated strictly from reception staff; requires encounter:clinical:read or encounter:clinical:write authorities.
+ * Links to attending doctor via explicit JPA relationship @ManyToOne doctor: User.
  */
 @Entity
 @Table(name = "clinic_encounters")
@@ -35,8 +36,9 @@ class Encounter(
     @JoinColumn(name = "patient_id", nullable = false)
     var patient: Patient,
 
-    @Column(name = "doctor_id", nullable = false)
-    var doctorId: UUID,
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "doctor_id", nullable = false)
+    var doctor: User,
 
     @Column(name = "chief_complaint", nullable = false, columnDefinition = "TEXT")
     var chiefComplaint: String,
@@ -61,14 +63,49 @@ class Encounter(
     var encounterDate: Instant = Instant.now()
 ) : BaseTenantEntity() {
 
+    // Overloaded secondary constructor for convenience and backwards-compatibility
+    constructor(
+        patient: Patient,
+        doctorId: UUID,
+        chiefComplaint: String,
+        subjectiveNotes: String? = null,
+        objectiveExam: String? = null,
+        diagnosis: String,
+        prescription: String? = null,
+        status: EncounterStatus = EncounterStatus.COMPLETED,
+        encounterDate: Instant = Instant.now(),
+        appointment: Appointment? = null
+    ) : this(
+        appointment = appointment,
+        patient = patient,
+        doctor = User(
+            email = "doctor-$doctorId@clinic.internal",
+            passwordHash = "{noop}stub",
+            fullName = "Doctor",
+            role = UserRole.DOCTOR
+        ).apply { id = doctorId },
+        chiefComplaint = chiefComplaint,
+        subjectiveNotes = subjectiveNotes,
+        objectiveExam = objectiveExam,
+        diagnosis = diagnosis,
+        prescription = prescription,
+        status = status,
+        encounterDate = encounterDate
+    )
+
+    // Doctor ID accessor matching doctor relationship
+    var doctorId: UUID
+        get() = doctor.id
+        set(_) {}
+
     // Compatibility properties
     var patientId: UUID
         get() = patient.id
         set(_) {}
 
     var practitionerId: UUID
-        get() = doctorId
-        set(value) { doctorId = value }
+        get() = doctor.id
+        set(_) {}
 
     var assessment: String?
         get() = diagnosis
