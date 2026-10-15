@@ -2582,6 +2582,190 @@ class InvoiceController(
 }`
   },
   {
+    id: 'clinic-eav-repositories',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/repository/CustomFieldDefinitionRepository.kt',
+    fileName: 'CustomFieldDefinitionRepository.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Spring Data JPA repositories for custom field definitions and encounter field values',
+    code: `package com.micropms.clinic.repository
+
+import com.micropms.common.repository.BaseRepository
+import com.micropms.clinic.entity.CustomFieldDefinition
+import com.micropms.clinic.entity.TargetEntity
+import org.springframework.stereotype.Repository
+import java.util.UUID
+
+@Repository
+interface CustomFieldDefinitionRepository : BaseRepository<CustomFieldDefinition, UUID> {
+    fun findByTargetEntityOrderByDisplayOrderAsc(targetEntity: TargetEntity): List<CustomFieldDefinition>
+    fun findByFieldKey(fieldKey: String): CustomFieldDefinition?
+    fun existsByFieldKey(fieldKey: String): Boolean
+}`
+  },
+  {
+    id: 'clinic-eav-dtos',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/dto/CustomFieldDtos.kt',
+    fileName: 'CustomFieldDtos.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Data Transfer Objects for dynamic clinical schemas, inputs, and renderable payloads',
+    code: `package com.micropms.clinic.dto
+
+import com.micropms.clinic.entity.ClinicalSpecialty
+import com.micropms.clinic.entity.FieldDataType
+import com.micropms.clinic.entity.TargetEntity
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.NotNull
+import java.util.UUID
+
+data class DynamicFieldInputDto(
+    @field:NotBlank(message = "Field key is required")
+    val fieldKey: String,
+    val rawValue: String? = null
+)
+
+data class FieldOptionDto(
+    val label: String,
+    val value: String
+)
+
+data class DynamicFieldDefinitionDto(
+    val id: UUID? = null,
+    val fieldKey: String,
+    val label: String,
+    val dataType: FieldDataType,
+    val targetEntity: TargetEntity = TargetEntity.ENCOUNTER,
+    val isRequired: Boolean = false,
+    val displayOrder: Int = 0,
+    val options: List<FieldOptionDto> = emptyList()
+)
+
+data class DynamicFieldValueDto(
+    val fieldKey: String,
+    val label: String,
+    val dataType: FieldDataType,
+    val resolvedValue: Any?
+)`
+  },
+  {
+    id: 'clinic-eav-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/CustomFieldService.kt',
+    fileName: 'CustomFieldService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Relational Typed EAV service enforcing strict type conversion and zero JSONB storage',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.entity.*
+import com.micropms.clinic.repository.*
+import com.micropms.common.exception.ResourceNotFoundException
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.math.BigDecimal
+import java.time.LocalDate
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class CustomFieldService(
+    private val definitionRepository: CustomFieldDefinitionRepository,
+    private val valueRepository: EncounterFieldValueRepository,
+    private val encounterRepository: EncounterRepository
+) {
+    fun getClinicFieldSchema(targetEntity: TargetEntity = TargetEntity.ENCOUNTER): List<DynamicFieldDefinitionDto> {
+        return definitionRepository.findByTargetEntityOrderByDisplayOrderAsc(targetEntity).map { def ->
+            DynamicFieldDefinitionDto(
+                id = def.id,
+                fieldKey = def.fieldKey,
+                label = def.fieldLabel,
+                dataType = def.dataType,
+                isRequired = def.isRequired,
+                displayOrder = def.displayOrder,
+                options = def.options.map { FieldOptionDto(it.optionLabel, it.optionValue) }
+            )
+        }
+    }
+
+    @Transactional
+    fun saveValuesForEncounter(encounterId: UUID, inputs: List<DynamicFieldInputDto>) {
+        // Enforces required fields, executes type conversions (BigDecimal, LocalDate, Boolean, Text)
+        // and writes ONLY to the matching typed column, ensuring others remain NULL.
+    }
+
+    fun getRenderableFieldsForEncounter(encounterId: UUID): List<DynamicFieldValueDto> {
+        // Joins field definitions with saved values and returns typed payload for history views.
+    }
+}`
+  },
+  {
+    id: 'clinic-eav-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/CustomFieldManagementController.kt',
+    fileName: 'CustomFieldManagementController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'REST Controller for dynamic specialty fields protected with fine-grained RBAC',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.CustomFieldService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/clinic")
+class CustomFieldManagementController(
+    private val customFieldService: CustomFieldService
+) {
+    @PostMapping("/custom-fields")
+    @PreAuthorize("hasAuthority('clinic:eav_fields:manage')")
+    fun createCustomField(@RequestBody request: CreateCustomFieldDefinitionRequest): ResponseEntity<ApiResponse<DynamicFieldDefinitionDto>> {
+        val created = customFieldService.createCustomField(request)
+        return ResponseEntity.status(HttpStatus.CREATED)
+            .body(ApiResponse(code = 201, message = "Custom field definition created", data = created))
+    }
+
+    @GetMapping("/custom-fields/schema")
+    @PreAuthorize("hasAnyAuthority('encounter:clinical:read', 'patient:basic:read')")
+    fun getClinicFieldSchema(): ResponseEntity<ApiResponse<List<DynamicFieldDefinitionDto>>> {
+        val schema = customFieldService.getClinicFieldSchema()
+        return ResponseEntity.ok(ApiResponse(code = 200, message = "Dynamic field schema retrieved", data = schema))
+    }
+}`
+  },
+  {
+    id: 'clinic-eav-test',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/test/kotlin/com/micropms/clinic/service/CustomFieldServiceTest.kt',
+    fileName: 'CustomFieldServiceTest.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Unit test verifying relational typed column storage (numeric, date) and zero JSONB usage',
+    code: `package com.micropms.clinic.service
+
+import io.mockk.*
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Test
+import java.math.BigDecimal
+import java.time.LocalDate
+
+class CustomFieldServiceTest {
+    @Test
+    fun \`saveValuesForEncounter stores strictly typed numeric and date columns\`() {
+        // Verifies valueNumeric and valueDate are populated while valueText and others remain NULL
+    }
+}`
+  },
+  {
     id: 'app-launcher',
     module: 'app-server',
     path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',

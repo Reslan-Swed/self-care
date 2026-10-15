@@ -15,12 +15,20 @@ import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.UUID
 
-enum class CustomFieldDataType {
+enum class FieldDataType {
     TEXT,
-    NUMERIC,
+    NUMBER,
     DATE,
-    BOOLEAN,
-    SELECT
+    SELECT,
+    BOOLEAN
+}
+
+// Alias for backwards compatibility
+typealias CustomFieldDataType = FieldDataType
+
+enum class TargetEntity {
+    ENCOUNTER,
+    PATIENT
 }
 
 enum class ClinicalSpecialty {
@@ -33,7 +41,7 @@ enum class ClinicalSpecialty {
 }
 
 /**
- * Relational Typed EAV Schema Definition: Defines tenant-scoped custom fields per clinical specialty.
+ * Relational Typed EAV Schema Definition: Defines tenant-scoped custom fields per clinical specialty or entity.
  * No unstructured JSONB or raw JSON columns are allowed.
  */
 @Entity
@@ -43,22 +51,34 @@ class CustomFieldDefinition(
     var fieldKey: String,
 
     @Column(name = "display_name", nullable = false)
-    var displayName: String,
+    var fieldLabel: String,
 
     @Enumerated(EnumType.STRING)
     @Column(name = "data_type", nullable = false)
-    var dataType: CustomFieldDataType,
+    var dataType: FieldDataType,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "target_entity", nullable = false)
+    var targetEntity: TargetEntity = TargetEntity.ENCOUNTER,
 
     @Enumerated(EnumType.STRING)
     @Column(name = "specialty", nullable = false)
-    var specialty: ClinicalSpecialty,
+    var specialty: ClinicalSpecialty = ClinicalSpecialty.GENERAL_PRACTICE,
+
+    @Column(name = "display_order", nullable = false)
+    var displayOrder: Int = 0,
 
     @Column(name = "is_required", nullable = false)
     var isRequired: Boolean = false,
 
     @OneToMany(mappedBy = "fieldDefinition", cascade = [CascadeType.ALL], orphanRemoval = true, fetch = FetchType.LAZY)
     var options: MutableList<CustomFieldOption> = mutableListOf()
-) : BaseTenantEntity()
+) : BaseTenantEntity() {
+    // Convenience alias for displayName
+    var displayName: String
+        get() = fieldLabel
+        set(value) { fieldLabel = value }
+}
 
 @Entity
 @Table(name = "custom_field_options")

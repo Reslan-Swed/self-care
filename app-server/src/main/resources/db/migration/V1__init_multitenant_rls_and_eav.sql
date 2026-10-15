@@ -162,8 +162,10 @@ CREATE TABLE custom_field_definitions (
     version BIGINT NOT NULL DEFAULT 0,
     field_key VARCHAR(100) NOT NULL,
     display_name VARCHAR(255) NOT NULL,
-    data_type VARCHAR(50) NOT NULL, -- TEXT, NUMERIC, DATE, BOOLEAN, SELECT
-    specialty VARCHAR(50) NOT NULL,
+    data_type VARCHAR(50) NOT NULL, -- TEXT, NUMBER, NUMERIC, DATE, BOOLEAN, SELECT
+    specialty VARCHAR(50) NOT NULL DEFAULT 'GENERAL_PRACTICE',
+    target_entity VARCHAR(50) NOT NULL DEFAULT 'ENCOUNTER',
+    display_order INT NOT NULL DEFAULT 0,
     is_required BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT uq_custom_field_key_per_tenant UNIQUE (tenant_id, field_key)
 );
