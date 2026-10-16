@@ -2,7 +2,7 @@ package com.micropms.clinic.entity
 
 /**
  * Roles assigned to clinic staff within an isolated tenant realm.
- * Maps directly to fine-grained RBAC authorities to enforce clinical privacy.
+ * Maps directly to fine-grained RBAC authorities to enforce clinical privacy and financial controls.
  */
 enum class UserRole {
     CLINIC_ADMIN,
@@ -12,6 +12,7 @@ enum class UserRole {
     /**
      * Resolves the fine-grained Spring Security authorities for each role.
      * Clinical data (SOAP notes, diagnoses, prescriptions) is strictly restricted to DOCTORs.
+     * Financial shift auditing is restricted to CLINIC_ADMINs.
      */
     fun authorities(): List<String> = when (this) {
         CLINIC_ADMIN -> listOf(
@@ -26,7 +27,12 @@ enum class UserRole {
             "patient:basic:read",
             "patient:basic:write",
             "invoice:read",
-            "invoice:write"
+            "invoice:write",
+            "billing:invoice:create",
+            "billing:payment:collect",
+            "billing:shift:close",
+            "billing:reports:financial",
+            "notification:dispatch"
         )
         DOCTOR -> listOf(
             "ROLE_DOCTOR",
@@ -38,7 +44,8 @@ enum class UserRole {
             "appointment:read",
             "appointment:create",
             "queue:status:update",
-            "clinic:users:read"
+            "clinic:users:read",
+            "billing:invoice:create"
         )
         RECEPTIONIST -> listOf(
             "ROLE_RECEPTIONIST",
@@ -50,7 +57,11 @@ enum class UserRole {
             "patient:basic:write",
             "invoice:read",
             "invoice:write",
-            "clinic:users:read"
+            "clinic:users:read",
+            "billing:invoice:create",
+            "billing:payment:collect",
+            "billing:shift:close",
+            "notification:dispatch"
         )
     }
 }

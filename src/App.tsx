@@ -3545,6 +3545,299 @@ class PublicOnboardingController(private val registrationService: TenantRegistra
 }`
   },
   {
+    id: 'clinic-billing-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/Invoice.kt',
+    fileName: 'Invoice.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Billing invoice entity with high-precision BigDecimal amounts, patient/encounter links, and payment ledger',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.*
+import java.math.BigDecimal
+
+enum class InvoiceStatus { UNPAID, PARTIAL, PAID, CANCELLED }
+enum class PaymentMethod { CASH, CARD, TRANSFER }
+
+@Entity
+@Table(name = "clinic_invoices")
+class Invoice(
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "patient_id", nullable = false) var patient: Patient,
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "encounter_id") var encounter: Encounter? = null,
+    @Column(name = "invoice_number", nullable = false) var invoiceNumber: String,
+    @Column(name = "total_amount", nullable = false, precision = 12, scale = 2) var totalAmount: BigDecimal,
+    @Column(name = "paid_amount", nullable = false, precision = 12, scale = 2) var paidAmount: BigDecimal = BigDecimal.ZERO,
+    @Enumerated(EnumType.STRING) @Column(name = "status", nullable = false) var status: InvoiceStatus = InvoiceStatus.UNPAID,
+    @OneToMany(mappedBy = "invoice", cascade = [CascadeType.ALL], orphanRemoval = true) var payments: MutableList<InvoicePayment> = mutableListOf()
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-shift-entity',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/ShiftSettlement.kt',
+    fileName: 'ShiftSettlement.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Receptionist cash drawer and shift settlement entity calculating expected cash vs actual discrepancy',
+    code: `package com.micropms.clinic.entity
+
+import com.micropms.multitenancy.entity.BaseTenantEntity
+import jakarta.persistence.*
+import java.math.BigDecimal
+import java.time.Instant
+
+enum class ShiftStatus { OPEN, CLOSED }
+
+@Entity
+@Table(name = "clinic_shift_settlements")
+class ShiftSettlement(
+    @ManyToOne(fetch = FetchType.LAZY) @JoinColumn(name = "receptionist_id", nullable = false) var receptionist: User,
+    @Column(name = "opened_at", nullable = false) var openedAt: Instant = Instant.now(),
+    @Column(name = "closed_at") var closedAt: Instant? = null,
+    @Column(name = "expected_cash_amount", precision = 12, scale = 2) var expectedCashAmount: BigDecimal = BigDecimal.ZERO,
+    @Column(name = "actual_cash_amount", precision = 12, scale = 2) var actualCashAmount: BigDecimal? = null,
+    @Column(name = "card_amount", precision = 12, scale = 2) var cardAmount: BigDecimal = BigDecimal.ZERO,
+    @Column(name = "discrepancy", precision = 12, scale = 2) var discrepancy: BigDecimal? = null,
+    @Enumerated(EnumType.STRING) var status: ShiftStatus = ShiftStatus.OPEN
+) : BaseTenantEntity()`
+  },
+  {
+    id: 'clinic-billing-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/BillingService.kt',
+    fileName: 'BillingService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Billing service executing payment processing with pessimistic write locking on Invoices',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.repository.*
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.math.BigDecimal
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class BillingService(
+    private val invoiceRepository: InvoiceRepository,
+    private val invoicePaymentRepository: InvoicePaymentRepository
+) {
+    @Transactional
+    fun createInvoice(command: CreateInvoiceCommand): InvoiceResponseDto {
+        // Generates invoice for patient or encounter with BigDecimal precision
+    }
+
+    @Transactional
+    fun recordPayment(invoiceId: UUID, amount: BigDecimal, method: PaymentMethod, notes: String?): InvoiceResponseDto {
+        // Acquires PESSIMISTIC_WRITE lock on invoice, records payment with receivedBy user, recalculates status
+        val invoice = invoiceRepository.findByIdWithLock(invoiceId).orElseThrow()
+        // ...
+    }
+}`
+  },
+  {
+    id: 'clinic-shift-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/ShiftSettlementService.kt',
+    fileName: 'ShiftSettlementService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Shift settlement service managing active drawer balance and end-of-shift cash discrepancy calculation',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.repository.*
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.math.BigDecimal
+
+@Service
+@Transactional(readOnly = true)
+class ShiftSettlementService(
+    private val shiftSettlementRepository: ShiftSettlementRepository,
+    private val invoicePaymentRepository: InvoicePaymentRepository
+) {
+    @Transactional
+    fun getActiveShift(): DailyShiftSummaryDto {
+        // Returns or opens today's shift drawer for current receptionist
+    }
+
+    @Transactional
+    fun closeShift(actualCashAmount: BigDecimal, notes: String?): DailyShiftSummaryDto {
+        // Aggregates CASH and CARD payments recorded since openedAt and computes discrepancy
+    }
+
+    fun getShiftReports(dateRange: DateRangeDto): List<DailyShiftSummaryDto> {
+        // Auditing endpoint for CLINIC_ADMIN
+    }
+}`
+  },
+  {
+    id: 'clinic-whatsapp-dispatcher',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/WhatsAppDispatcher.kt',
+    fileName: 'WhatsAppDispatcher.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Dual-mode WhatsApp dispatcher: Automated async dispatch with credit consumption or zero-cost Click-to-Chat fallback URL',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.common.notification.WhatsAppCreditPort
+import org.springframework.stereotype.Service
+import java.net.URLEncoder
+
+@Service
+class WhatsAppDispatcher(private val whatsAppCreditPort: WhatsAppCreditPort? = null) {
+    fun dispatchOrGenerateLink(appointmentId: UUID, patientName: String, patientPhone: String, message: String): NotificationResultDto {
+        // Primary: Automated API dispatch consuming credit if available
+        // Fallback: https://wa.me/{phone}?text={encoded_message}
+    }
+}`
+  },
+  {
+    id: 'clinic-billing-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/BillingController.kt',
+    fileName: 'BillingController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Billing REST controller with billing:invoice:create and billing:payment:collect RBAC',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.BillingService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/billing")
+class BillingController(private val billingService: BillingService) {
+    @PostMapping("/invoices")
+    @PreAuthorize("hasAuthority('billing:invoice:create')")
+    fun createInvoice(@RequestBody cmd: CreateInvoiceCommand) =
+        ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse(201, "Invoice created", billingService.createInvoice(cmd)))
+
+    @PostMapping("/invoices/{id}/payments")
+    @PreAuthorize("hasAuthority('billing:payment:collect')")
+    fun recordPayment(@PathVariable id: UUID, @RequestBody cmd: RecordPaymentCommand) =
+        ResponseEntity.ok(ApiResponse(200, "Payment recorded", billingService.recordPayment(id, cmd.amount, cmd.paymentMethod, cmd.notes)))
+}`
+  },
+  {
+    id: 'clinic-shift-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/ShiftSettlementController.kt',
+    fileName: 'ShiftSettlementController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Shift settlement controller with billing:payment:collect, billing:shift:close, and billing:reports:financial RBAC',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.ShiftSettlementService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+
+@RestController
+@RequestMapping("/api/billing/shifts")
+class ShiftSettlementController(private val shiftService: ShiftSettlementService) {
+    @GetMapping("/current")
+    @PreAuthorize("hasAuthority('billing:payment:collect')")
+    fun getCurrentShift() = ResponseEntity.ok(ApiResponse(200, "Current shift", shiftService.getActiveShift()))
+
+    @PostMapping("/close")
+    @PreAuthorize("hasAuthority('billing:shift:close')")
+    fun closeShift(@RequestBody cmd: CloseShiftCommand) =
+        ResponseEntity.ok(ApiResponse(200, "Shift closed", shiftService.closeShift(cmd.actualCashAmount, cmd.notes)))
+
+    @GetMapping("/reports")
+    @PreAuthorize("hasAuthority('billing:reports:financial')")
+    fun getReports() = ResponseEntity.ok(ApiResponse(200, "Reports retrieved", shiftService.getShiftReports(DateRangeDto())))
+}`
+  },
+  {
+    id: 'clinic-notification-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/NotificationController.kt',
+    fileName: 'NotificationController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Notification controller for generating Click-to-Chat URLs and triggering automated dispatches',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.dto.*
+import com.micropms.clinic.service.NotificationService
+import com.micropms.common.dto.ApiResponse
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/notifications")
+class NotificationController(private val notificationService: NotificationService) {
+    @PostMapping("/appointments/{id}/whatsapp-link")
+    @PreAuthorize("hasAnyAuthority('notification:dispatch', 'appointment:create', 'appointment:read')")
+    fun getLink(@PathVariable id: UUID) =
+        ResponseEntity.ok(ApiResponse(200, "Link generated", notificationService.getWhatsAppClickToChatLink(id)))
+
+    @PostMapping("/appointments/{id}/dispatch")
+    @PreAuthorize("hasAuthority('notification:dispatch')")
+    fun dispatch(@PathVariable id: UUID) =
+        ResponseEntity.ok(ApiResponse(200, "Notification dispatched", notificationService.sendAppointmentConfirmation(id)))
+}`
+  },
+  {
+    id: 'migration-v3-billing',
+    module: 'app-server',
+    path: '/app-server/src/main/resources/db/migration/V3__clinic_billing_shift_settlement.sql',
+    fileName: 'V3__clinic_billing_shift_settlement.sql',
+    language: 'sql',
+    category: 'config',
+    description: 'Flyway migration creating clinic_invoice_payments, clinic_shift_settlements with RLS and numeric precision',
+    code: `-- V3: Clinic Billing Ledger, Payments, and Shift Settlements
+ALTER TABLE clinic_invoices 
+    ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00;
+
+CREATE TABLE clinic_invoice_payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+    invoice_id UUID NOT NULL REFERENCES clinic_invoices(id) ON DELETE CASCADE,
+    amount NUMERIC(12, 2) NOT NULL,
+    payment_method VARCHAR(50) NOT NULL,
+    received_by UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    payment_date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE clinic_invoice_payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clinic_invoice_payments FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_invoice_payments_isolation ON clinic_invoice_payments FOR ALL USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
+
+CREATE TABLE clinic_shift_settlements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID NOT NULL REFERENCES platform_tenants(id) ON DELETE RESTRICT,
+    receptionist_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at TIMESTAMPTZ,
+    expected_cash_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    actual_cash_amount NUMERIC(12, 2),
+    card_amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    discrepancy NUMERIC(12, 2),
+    status VARCHAR(50) NOT NULL DEFAULT 'OPEN'
+);
+
+ALTER TABLE clinic_shift_settlements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clinic_shift_settlements FORCE ROW LEVEL SECURITY;
+CREATE POLICY rls_shift_settlements_isolation ON clinic_shift_settlements FOR ALL USING (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);`
+  },
+  {
     id: 'app-launcher',
     module: 'app-server',
     path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',
@@ -4207,6 +4500,181 @@ export default function App() {
           code: 422,
           message: "Subscription doctor quota exceeded for tenant. Current plan '14-Day Free Evaluation Trial' allows up to 3 doctor(s). Active doctors: 3.",
           errors: null,
+          timestamp: now
+        });
+      } else if (endpoint === 'billing-create-invoice') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 201,
+          message: "Invoice created successfully",
+          data: {
+            id: "e1f2a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b",
+            invoiceNumber: "INV-20261016-A94F12",
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            patientName: "Jane Doe",
+            encounterId: "9e1c2b3a-4d5e-6f7a-8b9c-0d1e2f3a4b5c",
+            totalAmount: 185.00,
+            paidAmount: 0.00,
+            balanceDue: 185.00,
+            status: "UNPAID",
+            notes: "Clinical consultation and pediatric panel",
+            payments: [],
+            createdAt: now,
+            updatedAt: now
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'billing-record-payment') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Payment of $100.00 recorded successfully via CASH under pessimistic write lock",
+          data: {
+            id: "e1f2a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b",
+            invoiceNumber: "INV-20261016-A94F12",
+            patientId: "7b4c81a2-5f3e-4d91-8b20-1a4d93e81001",
+            patientName: "Jane Doe",
+            totalAmount: 185.00,
+            paidAmount: 100.00,
+            balanceDue: 85.00,
+            status: "PARTIAL",
+            payments: [
+              {
+                id: "c4d5e6f7-a8b9-0c1d-2e3f-4a5b6c7d8e9f",
+                amount: 100.00,
+                paymentMethod: "CASH",
+                receivedById: "8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e",
+                receivedByName: "Emily Watson (Receptionist)",
+                notes: "Initial cash co-pay",
+                paymentDate: now
+              }
+            ],
+            createdAt: now,
+            updatedAt: now
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'shifts-current') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Active shift balance retrieved",
+          data: {
+            id: "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
+            receptionistId: "8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e",
+            receptionistName: "Emily Watson",
+            openedAt: "2026-10-16T08:00:00Z",
+            closedAt: null,
+            expectedCashAmount: 320.00,
+            actualCashAmount: null,
+            cardAmount: 840.00,
+            transferAmount: 0.00,
+            totalCollected: 1160.00,
+            discrepancy: null,
+            status: "OPEN",
+            transactionCount: 7,
+            closureNotes: null
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'shifts-close') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Daily shift closed and reconciled successfully",
+          data: {
+            id: "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
+            receptionistId: "8b9c0d1e-2f3a-4b5c-6d7e-8f9a0b1c2d3e",
+            receptionistName: "Emily Watson",
+            openedAt: "2026-10-16T08:00:00Z",
+            closedAt: now,
+            expectedCashAmount: 320.00,
+            actualCashAmount: 320.00,
+            cardAmount: 840.00,
+            transferAmount: 0.00,
+            totalCollected: 1160.00,
+            discrepancy: 0.00,
+            status: "CLOSED",
+            transactionCount: 7,
+            closureNotes: "Evening drawer balanced with zero discrepancy. Handed over to vault safe."
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'shifts-reports') {
+        if (simulatedRole === 'RECEPTIONIST') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Role RECEPTIONIST lacks required authority 'billing:reports:financial'. Financial shift audit history is restricted strictly to CLINIC_ADMIN.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Historical shift reports retrieved successfully",
+            data: [
+              {
+                id: "d9e8f7a6-b5c4-3d2e-1f0a-9b8c7d6e5f4a",
+                receptionistName: "Emily Watson",
+                openedAt: "2026-10-15T08:00:00Z",
+                closedAt: "2026-10-15T17:00:00Z",
+                expectedCashAmount: 450.00,
+                actualCashAmount: 450.00,
+                cardAmount: 1120.00,
+                transferAmount: 0.00,
+                totalCollected: 1570.00,
+                discrepancy: 0.00,
+                status: "CLOSED",
+                transactionCount: 12
+              },
+              {
+                id: "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+                receptionistName: "Marcus Vance",
+                openedAt: "2026-10-14T08:00:00Z",
+                closedAt: "2026-10-14T17:00:00Z",
+                expectedCashAmount: 380.00,
+                actualCashAmount: 375.00,
+                cardAmount: 950.00,
+                transferAmount: 50.00,
+                totalCollected: 1375.00,
+                discrepancy: -5.00,
+                status: "CLOSED",
+                transactionCount: 9
+              }
+            ],
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'notifications-whatsapp-link') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "WhatsApp Click-to-Chat URL generated successfully",
+          data: {
+            url: "https://wa.me/15552345678?text=Hello%20Jane%20Doe%2C%20your%20appointment%20with%20Dr.%20Sarah%20Jenkins%2C%20MD%20is%20confirmed%20for%20Friday%2C%20Oct%2016%2C%202026%20at%203%3A00%20PM.%20Please%20arrive%2010%20minutes%20early.",
+            phone: "15552345678",
+            patientName: "Jane Doe",
+            mode: "BROWSER_CLICK_TO_CHAT"
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'notifications-dispatch') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Automated WhatsApp message dispatched successfully",
+          data: {
+            appointmentId: "a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",
+            patientName: "Jane Doe",
+            patientPhone: "15552345678",
+            mode: "AUTOMATED_DISPATCH",
+            message: "Hello Jane Doe, your appointment with Dr. Sarah Jenkins, MD is confirmed for Friday, Oct 16, 2026 at 3:00 PM.",
+            whatsappUrl: null,
+            creditsRemaining: 99,
+            dispatchedAt: now
+          },
           timestamp: now
         });
       }
@@ -4995,6 +5463,55 @@ export default function App() {
                   >
                     <span>POST /clinic/users (Quota Limit)</span>
                     <span className="text-[10px] font-mono text-amber-400">422</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('billing-create-invoice')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /api/billing/invoices</span>
+                    <span className="text-[10px] font-mono text-emerald-400">201</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('billing-record-payment')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /billing/invoices/payments</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200 (Lock)</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('shifts-current')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /billing/shifts/current</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('shifts-close')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /billing/shifts/close</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('shifts-reports')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /billing/shifts/reports</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'RECEPTIONIST' ? '403' : '200'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('notifications-whatsapp-link')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /notifications/whatsapp-link</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200 (wa.me)</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('notifications-dispatch')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /notifications/dispatch</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('validation-error')}
