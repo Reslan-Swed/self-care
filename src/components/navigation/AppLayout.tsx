@@ -6,6 +6,7 @@ import { ToastContainer } from '../notifications/ToastContainer';
 import { ProtectedRoute } from './ProtectedRoute';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguageSwitcher } from '../../i18n/useLanguageSwitcher';
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 
 // Import Views
 import ReceptionCockpitView from '../views/ReceptionCockpitView';
@@ -23,6 +24,16 @@ export const AppLayout: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<string>('/reception/cockpit');
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [omniboxOpen, setOmniboxOpen] = useState<boolean>(false);
+
+  useKeyboardShortcuts({
+    onOpenOmnibox: () => setOmniboxOpen(true),
+    onQuickBook: () => {
+      if (currentRoute !== '/reception/cockpit') {
+        setCurrentRoute('/reception/cockpit');
+      }
+    },
+    onEscape: () => setOmniboxOpen(false)
+  });
 
   const handleNavigate = (route: string) => {
     setCurrentRoute(route);
