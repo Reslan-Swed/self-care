@@ -18,7 +18,7 @@ import { useToast } from '../../context/ToastContext';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
 import { OmniboxModal, OmniboxPatientResult } from '../navigation/OmniboxModal';
 import { QuickBookingModal } from './QuickBookingModal';
-import { QuickBillingModal } from './QuickBillingModal';
+import { PaymentModal } from '../billing/PaymentModal';
 import { LiveWaitingQueue, QueuePatient, ActiveConsultation } from './LiveWaitingQueue';
 import { AppointmentCalendarPane, CalendarAppointment } from './AppointmentCalendarPane';
 
@@ -489,9 +489,9 @@ export const ReceptionCockpitPage: React.FC = () => {
         onSuccess={handleBookingSuccess}
       />
 
-      {/* Quick Billing Modal */}
+      {/* Invoice Creation & Payment Modal */}
       {billingTarget && (
-        <QuickBillingModal
+        <PaymentModal
           isOpen={true}
           onClose={() => setBillingTarget(null)}
           patientName={billingTarget.patientName}
