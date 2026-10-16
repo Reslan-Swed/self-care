@@ -43,6 +43,7 @@ class SecurityConfig(
                     .requestMatchers(
                         "/api/public/**",
                         "/api/auth/**",
+                        "/api/platform/auth/**",
                         "/actuator/health/**",
                         "/actuator/info",
                         "/v3/api-docs/**",
@@ -61,6 +62,11 @@ class SecurityConfig(
             }
 
         return http.build()
+    }
+
+    @Bean
+    fun passwordEncoder(): org.springframework.security.crypto.password.PasswordEncoder {
+        return org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
     }
 
     @Bean

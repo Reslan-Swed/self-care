@@ -42,6 +42,19 @@ class UserController(
     }
 
     /**
+     * Update an existing clinic user profile.
+     */
+    @org.springframework.web.bind.annotation.PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('clinic:users:manage')")
+    fun updateClinicUser(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: com.micropms.clinic.dto.UpdateClinicUserRequest
+    ): ResponseEntity<ApiResponse<ClinicUserResponseDto>> {
+        val updated = userService.updateClinicUser(id, request)
+        return ResponseEntity.ok(ApiResponse(code = 200, message = "Clinic user updated successfully", data = updated))
+    }
+
+    /**
      * Soft-deactivate a clinic user (isActive = false).
      */
     @PatchMapping("/{id}/deactivate")

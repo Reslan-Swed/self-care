@@ -2,6 +2,7 @@ package com.micropms.clinic.service
 
 import com.micropms.clinic.dto.ClinicUserResponseDto
 import com.micropms.clinic.dto.CreateClinicUserRequest
+import com.micropms.clinic.dto.UpdateClinicUserRequest
 import com.micropms.clinic.entity.User
 import com.micropms.clinic.entity.UserRole
 import com.micropms.clinic.repository.UserRepository
@@ -10,14 +11,20 @@ import com.micropms.common.quota.DoctorQuotaValidator
 import com.micropms.multitenancy.context.TenantContext
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
 
+/**
+ * Service managing clinic staff lifecycle (Doctors, Receptionists, Clinic Admins).
+ * Enforces subscription doctor quota validation and soft-deactivation.
+ */
 @Service
 @Transactional(readOnly = true)
 class UserService(
     private val userRepository: UserRepository,
+    private val passwordEncoder: PasswordEncoder,
     @Autowired(required = false)
     private val doctorQuotaValidator: DoctorQuotaValidator? = null
 ) {
@@ -43,9 +50,8 @@ class UserService(
             doctorQuotaValidator?.validateDoctorQuota(tenantId, currentDoctorCount)
         }
 
-        // 3. Persist new clinic user
-        // Passwords in production are hashed via BCryptPasswordEncoder
-        val passwordHash = "{noop}${request.password}"
+        // 3. Persist new clinic user with BCrypt password hash
+        val passwordHash = passwordEncoder.encode(request.password)
 
         val user = User(
             email = normalizedEmail,
@@ -61,6 +67,34 @@ class UserService(
         val saved = userRepository.save(user)
         log.info("Created clinic user {} with role {} for tenant {}", saved.id, saved.role, tenantId)
         return toDto(saved)
+    }
+
+    /**
+     * Updates an existing clinic staff user's demographic or professional attributes.
+     */
+    @Transactional
+    fun updateClinicUser(userId: UUID, request: UpdateClinicUserRequest): ClinicUserResponseDto {
+        val tenantId = TenantContext.requireTenantId()
+        val user = userRepository.findById(userId)
+            .orElseThrow { ResourceNotFoundException("User not found with ID: $userId") }
+
+        // If promoting to DOCTOR from another role, re-validate quota
+        if (request.role != null && request.role == UserRole.DOCTOR && user.role != UserRole.DOCTOR) {
+            val currentDoctorCount = userRepository.countByRoleAndIsActiveTrue(UserRole.DOCTOR)
+            doctorQuotaValidator?.validateDoctorQuota(tenantId, currentDoctorCount)
+            user.role = request.role
+        } else if (request.role != null) {
+            user.role = request.role
+        }
+
+        user.fullName = request.fullName.trim()
+        request.phone?.let { user.phone = it.trim() }
+        request.specialty?.let { user.specialty = it.trim() }
+        request.licenseNumber?.let { user.licenseNumber = it.trim() }
+
+        val updated = userRepository.save(user)
+        log.info("Updated clinic user {} ({})", updated.id, updated.email)
+        return toDto(updated)
     }
 
     /**

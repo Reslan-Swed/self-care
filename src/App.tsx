@@ -3276,6 +3276,275 @@ ALTER TABLE clinic_appointments ADD CONSTRAINT fk_appointments_doctor FOREIGN KE
 ALTER TABLE clinic_encounters ADD CONSTRAINT fk_encounters_doctor FOREIGN KEY (doctor_id) REFERENCES users(id);`
   },
   {
+    id: 'common-auth-dtos',
+    module: 'core-common',
+    path: '/core-common/src/main/kotlin/com/micropms/common/dto/AuthDtos.kt',
+    fileName: 'AuthDtos.kt',
+    language: 'kotlin',
+    category: 'core-common',
+    description: 'Standard authentication & onboarding DTOs (LoginRequestDto, AuthResponseDto, UserProfileDto, RegisterClinicCommand)',
+    code: `package com.micropms.common.dto
+
+import jakarta.validation.constraints.*
+import java.time.Instant
+import java.util.UUID
+
+data class LoginRequestDto(
+    @field:NotBlank @field:Email val email: String,
+    @field:NotBlank val password: String,
+    val tenantSlug: String? = null
+)
+
+data class UserProfileDto(
+    val id: UUID,
+    val email: String,
+    val fullName: String,
+    val role: String,
+    val userType: String,
+    val authorities: List<String>,
+    val phone: String? = null,
+    val specialty: String? = null,
+    val licenseNumber: String? = null,
+    val tenantId: UUID? = null,
+    val tenantSlug: String? = null,
+    val tenantName: String? = null,
+    val isActive: Boolean = true
+)
+
+data class AuthResponseDto(
+    val token: String,
+    val tokenType: String = "Bearer",
+    val expiresIn: Long,
+    val user: UserProfileDto,
+    val tenant: TenantSummaryDto? = null
+)
+
+data class RegisterClinicCommand(
+    @field:NotBlank val clinicName: String,
+    @field:NotBlank val clinicSlug: String,
+    val specialty: String = "GENERAL",
+    val planCode: String = "TRIAL",
+    @field:NotBlank val adminFullName: String,
+    @field:NotBlank @field:Email val adminEmail: String,
+    @field:NotBlank val adminPassword: String,
+    val adminPhone: String? = null
+)`
+  },
+  {
+    id: 'multitenancy-user-details',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/security/SecurityUserDetails.kt',
+    fileName: 'SecurityUserDetails.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Unified UserDetails implementation wrapping either a clinic User or a PlatformAdmin',
+    code: `package com.micropms.multitenancy.security
+
+import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.core.userdetails.UserDetails
+import java.util.UUID
+
+class SecurityUserDetails(
+    val userId: UUID,
+    val tenantId: UUID?,
+    val userType: AuthUserType,
+    val email: String,
+    private val passwordHash: String,
+    val fullName: String,
+    val role: String,
+    private val authorities: Collection<GrantedAuthority>,
+    private val active: Boolean = true
+) : UserDetails {
+    val isPlatformAdmin: Boolean get() = userType == AuthUserType.PLATFORM_ADMIN
+    val isClinicStaff: Boolean get() = userType == AuthUserType.TENANT_USER
+
+    override fun getAuthorities(): Collection<GrantedAuthority> = authorities
+    override fun getPassword(): String = passwordHash
+    override fun getUsername(): String = email
+    override fun isAccountNonExpired(): Boolean = true
+    override fun isAccountNonLocked(): Boolean = active
+    override fun isCredentialsNonExpired(): Boolean = true
+    override fun isEnabled(): Boolean = active
+}`
+  },
+  {
+    id: 'multitenancy-jwt-provider',
+    module: 'core-multitenancy',
+    path: '/core-multitenancy/src/main/kotlin/com/micropms/multitenancy/security/JwtTokenProvider.kt',
+    fileName: 'JwtTokenProvider.kt',
+    language: 'kotlin',
+    category: 'multitenancy',
+    description: 'Cryptographic JWT signing provider generating tokens with embedded tenant claims and RBAC authorities',
+    code: `package com.micropms.multitenancy.security
+
+import io.jsonwebtoken.Jwts
+import io.jsonwebtoken.security.Keys
+import org.springframework.stereotype.Component
+import java.time.Instant
+import java.util.Date
+import java.util.UUID
+
+@Component
+class JwtTokenProvider(
+    private val jwtSecretKey: String,
+    private val expirationHours: Long = 24
+) {
+    fun generateTenantUserToken(
+        userId: UUID,
+        tenantId: UUID,
+        email: String,
+        role: String,
+        authorities: Collection<String>,
+        tenantSlug: String? = null
+    ): String {
+        return Jwts.builder()
+            .subject(userId.toString())
+            .claim("tenant_id", tenantId.toString())
+            .claim("user_type", "TENANT_USER")
+            .claim("email", email)
+            .claim("role", role)
+            .claim("authorities", authorities)
+            .signWith(signingKey)
+            .compact()
+    }
+
+    fun generatePlatformAdminToken(
+        adminId: UUID,
+        email: String,
+        role: String = "SUPER_ADMIN",
+        authorities: Collection<String>
+    ): String {
+        return Jwts.builder()
+            .subject(adminId.toString())
+            .claim("user_type", "PLATFORM_ADMIN")
+            .claim("email", email)
+            .claim("role", role)
+            .claim("authorities", authorities)
+            .signWith(signingKey)
+            .compact()
+    }
+}`
+  },
+  {
+    id: 'clinic-auth-service',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/service/ClinicAuthService.kt',
+    fileName: 'ClinicAuthService.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'Clinic authentication service verifying BCrypt credentials and resolving /me profiles',
+    code: `package com.micropms.clinic.service
+
+import com.micropms.common.dto.*
+import com.micropms.multitenancy.context.TenantContext
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+
+@Service
+@Transactional(readOnly = true)
+class ClinicAuthService(
+    private val userRepository: UserRepository,
+    private val passwordEncoder: PasswordEncoder,
+    private val jwtTokenProvider: JwtTokenProvider
+) {
+    fun login(request: LoginRequestDto, tenantSlugHeader: String? = null): AuthResponseDto {
+        // Resolves tenant, verifies BCrypt password hash, enforces active state, and returns JWT
+    }
+
+    fun getCurrentUser(userId: UUID, tenantId: UUID): UserProfileDto {
+        // Returns current staff member profile, role, and fine-grained authorities for /me
+    }
+}`
+  },
+  {
+    id: 'clinic-auth-controller',
+    module: 'module-clinic-core',
+    path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/controller/ClinicAuthController.kt',
+    fileName: 'ClinicAuthController.kt',
+    language: 'kotlin',
+    category: 'clinic',
+    description: 'REST Controller for /api/auth/login and /api/auth/me clinic staff session bootstrap',
+    code: `package com.micropms.clinic.controller
+
+import com.micropms.clinic.service.ClinicAuthService
+import com.micropms.common.dto.*
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+
+@RestController
+@RequestMapping("/api/auth")
+class ClinicAuthController(private val clinicAuthService: ClinicAuthService) {
+    @PostMapping("/login")
+    fun login(@RequestBody request: LoginRequestDto) =
+        ResponseEntity.ok(ApiResponse(200, "Authentication successful", clinicAuthService.login(request)))
+
+    @GetMapping("/me")
+    @PreAuthorize("isAuthenticated()")
+    fun getCurrentUser(authentication: Authentication) =
+        ResponseEntity.ok(ApiResponse(200, "Current user profile retrieved", clinicAuthService.getCurrentUser(userId, tenantId)))
+}`
+  },
+  {
+    id: 'saas-platform-auth-controller',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/controller/PlatformAuthController.kt',
+    fileName: 'PlatformAuthController.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane REST controller for /api/platform/auth/login and /api/platform/auth/me',
+    code: `package com.micropms.saas.controller
+
+import com.micropms.common.dto.*
+import com.micropms.saas.service.PlatformAdminAuthService
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+
+@RestController
+@RequestMapping("/api/platform/auth")
+class PlatformAuthController(private val authService: PlatformAdminAuthService) {
+    @PostMapping("/login")
+    fun login(@RequestBody request: LoginRequestDto) =
+        ResponseEntity.ok(ApiResponse(200, "Platform admin authentication successful", authService.login(request)))
+
+    @GetMapping("/me")
+    @PreAuthorize("hasAuthority('ROLE_SUPER_ADMIN') or hasAuthority('platform:admin')")
+    fun getCurrentAdmin(authentication: Authentication) =
+        ResponseEntity.ok(ApiResponse(200, "Platform admin profile retrieved", authService.getCurrentAdmin(adminId)))
+}`
+  },
+  {
+    id: 'saas-public-onboarding-controller',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/controller/PublicOnboardingController.kt',
+    fileName: 'PublicOnboardingController.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Public self-service practice onboarding endpoint (/api/public/onboarding/register)',
+    code: `package com.micropms.saas.controller
+
+import com.micropms.common.dto.*
+import com.micropms.saas.service.TenantRegistrationService
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.*
+
+@RestController
+@RequestMapping("/api/public/onboarding")
+class PublicOnboardingController(private val registrationService: TenantRegistrationService) {
+    @PostMapping("/register")
+    fun register(@RequestBody command: RegisterClinicCommand) =
+        ResponseEntity.status(HttpStatus.CREATED).body(
+            ApiResponse(201, "Clinic workspace and admin provisioned", registrationService.registerClinic(command))
+        )
+
+    @GetMapping("/check-slug")
+    fun checkSlug(@RequestParam slug: String) =
+        ResponseEntity.ok(ApiResponse(200, "Slug availability checked", mapOf("slug" to slug, "available" to registrationService.isSlugAvailable(slug))))
+}`
+  },
+  {
     id: 'app-launcher',
     module: 'app-server',
     path: '/app-server/src/main/kotlin/com/micropms/MicroPmsApplication.kt',
@@ -3832,6 +4101,112 @@ export default function App() {
             createdAt: now,
             updatedAt: now
           },
+          timestamp: now
+        });
+      } else if (endpoint === 'auth-login') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Authentication successful",
+          data: {
+            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            tokenType: "Bearer",
+            expiresIn: 86400,
+            user: {
+              id: "5f8a2c1b-9d4e-4f3a-8c7b-1a2b3c4d5e6f",
+              email: "dr.sarah@metrohealth.internal",
+              fullName: "Dr. Sarah Jenkins, MD",
+              role: "DOCTOR",
+              userType: "TENANT_USER",
+              authorities: ["ROLE_DOCTOR", "encounter:clinical:read", "encounter:clinical:write", "appointment:read", "queue:status:update"],
+              phone: "+1 (555) 234-5678",
+              specialty: "Pediatrics",
+              licenseNumber: "MED-98412",
+              tenantId: currentTenantUuid,
+              tenantSlug: "metro-health",
+              tenantName: "Metro Health Medical Center",
+              isActive: true
+            },
+            tenant: {
+              id: currentTenantUuid,
+              name: "Metro Health Medical Center",
+              slug: "metro-health",
+              status: "ACTIVE",
+              specialty: "PEDIATRICS"
+            }
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'auth-me') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Current user profile retrieved successfully",
+          data: {
+            id: "5f8a2c1b-9d4e-4f3a-8c7b-1a2b3c4d5e6f",
+            email: "dr.sarah@metrohealth.internal",
+            fullName: "Dr. Sarah Jenkins, MD",
+            role: "DOCTOR",
+            userType: "TENANT_USER",
+            authorities: ["ROLE_DOCTOR", "encounter:clinical:read", "encounter:clinical:write", "patient:basic:read", "appointment:read"],
+            specialty: "Pediatrics",
+            licenseNumber: "MED-98412",
+            tenantId: currentTenantUuid,
+            tenantSlug: "metro-health",
+            tenantName: "Metro Health Medical Center",
+            isActive: true
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'platform-auth-login') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 200,
+          message: "Platform admin authentication successful",
+          data: {
+            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            tokenType: "Bearer",
+            expiresIn: 86400,
+            user: {
+              id: "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+              email: "superadmin@micropms.io",
+              fullName: "Global Platform Administrator",
+              role: "SUPER_ADMIN",
+              userType: "PLATFORM_ADMIN",
+              authorities: ["ROLE_SUPER_ADMIN", "platform:admin", "platform:tenants:manage", "platform:impersonate:tenant"],
+              tenantId: null,
+              tenantSlug: null,
+              isActive: true
+            },
+            tenant: null
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'public-onboard-register') {
+        setApiExecutionStatus('success');
+        setApiResponsePayload({
+          code: 201,
+          message: "Clinic workspace and initial administrator account provisioned successfully",
+          data: {
+            tenantId: "8f2a1b0c-4d3e-4b2a-9c1d-7e6f5a4b3c2d",
+            clinicName: "Summit Pediatric Care",
+            clinicSlug: "summit-pediatrics",
+            adminId: "3e4f5a6b-7c8d-9e0f-1a2b-3c4d5e6f7a8b",
+            adminEmail: "admin@summitpediatrics.com",
+            adminFullName: "Dr. Alex Rivera",
+            token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            tokenType: "Bearer",
+            expiresIn: 86400,
+            registeredAt: now
+          },
+          timestamp: now
+        });
+      } else if (endpoint === 'quota-exceeded') {
+        setApiExecutionStatus('error');
+        setApiResponsePayload({
+          code: 422,
+          message: "Subscription doctor quota exceeded for tenant. Current plan '14-Day Free Evaluation Trial' allows up to 3 doctor(s). Active doctors: 3.",
+          errors: null,
           timestamp: now
         });
       }
@@ -4585,6 +4960,41 @@ export default function App() {
                   >
                     <span>POST /payments (ACID)</span>
                     <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('auth-login')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /api/auth/login</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('auth-me')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /api/auth/me</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('platform-auth-login')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /api/platform/auth/login</span>
+                    <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('public-onboard-register')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /api/public/onboarding/register</span>
+                    <span className="text-[10px] font-mono text-emerald-400">201</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('quota-exceeded')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /clinic/users (Quota Limit)</span>
+                    <span className="text-[10px] font-mono text-amber-400">422</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('validation-error')}

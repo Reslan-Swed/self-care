@@ -29,6 +29,16 @@ data class CreateClinicUserRequest(
     val licenseNumber: String? = null
 )
 
+data class UpdateClinicUserRequest(
+    @field:NotBlank(message = "Full name is required")
+    val fullName: String,
+
+    val phone: String? = null,
+    val specialty: String? = null,
+    val licenseNumber: String? = null,
+    val role: UserRole? = null
+)
+
 data class ClinicUserResponseDto(
     val id: UUID,
     val email: String,

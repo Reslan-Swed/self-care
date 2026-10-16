@@ -150,6 +150,7 @@ class TenantInterceptor : HandlerInterceptor {
     private fun isPublicOrInfrastructurePath(uri: String): Boolean {
         return uri.startsWith("/api/public") ||
                 uri.startsWith("/api/auth") ||
+                uri.startsWith("/api/platform/auth") ||
                 uri.startsWith("/actuator") ||
                 uri.startsWith("/swagger-ui") ||
                 uri.startsWith("/v3/api-docs")
