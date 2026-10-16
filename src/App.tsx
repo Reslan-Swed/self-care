@@ -2145,6 +2145,191 @@ class PlatformImpersonationController(
 }`
   },
   {
+    id: 'saas-platform-analytics-dtos',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/dto/PlatformAnalyticsDtos.kt',
+    fileName: 'PlatformAnalyticsDtos.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Data Transfer Objects for SaaS MRR aggregation, credit consumption, and Tenant 360 profile snapshots',
+    code: `package com.micropms.saas.dto
+
+import com.micropms.common.dto.TenantSummaryDto
+import jakarta.validation.constraints.Min
+import jakarta.validation.constraints.NotBlank
+import java.time.Instant
+import java.util.UUID
+
+data class PlatformDashboardMetricsDto(
+    val activeTenantsCount: Long,
+    val totalMrrCents: Long,
+    val trialTenantsCount: Long,
+    val pastDueTenantsCount: Long,
+    val renewalRatePercentage: Double,
+    val globalWhatsappCreditsUsed: Long,
+    val globalWhatsappCreditsTotal: Long
+)
+
+data class SubscriptionDetailsDto(
+    val planCode: String,
+    val planName: String,
+    val status: String,
+    val priceCents: Int,
+    val currentPeriodStart: Instant,
+    val currentPeriodEnd: Instant,
+    val creditsRemaining: Int
+)
+
+data class TenantUsageStatsDto(
+    val activeDoctorsCount: Int,
+    val maxDoctors: Int,
+    val totalEncountersCount: Long,
+    val totalStorageBytes: Long
+)
+
+data class PlatformBillingRecordDto(
+    val id: UUID,
+    val invoiceNumber: String,
+    val amountCents: Long,
+    val status: String,
+    val periodStart: Instant,
+    val periodEnd: Instant,
+    val paidAt: Instant?
+)
+
+data class AuditImpersonationLogDto(
+    val id: UUID,
+    val adminId: UUID,
+    val justification: String,
+    val ipAddress: String,
+    val createdAt: Instant,
+    val sessionExpiresAt: Instant
+)
+
+data class Tenant360ProfileDto(
+    val tenant: TenantSummaryDto,
+    val subscription: SubscriptionDetailsDto,
+    val usageStats: TenantUsageStatsDto,
+    val billingHistory: List<PlatformBillingRecordDto>,
+    val recentAuditLogs: List<AuditImpersonationLogDto>
+)
+
+data class ChangeTenantTierCommand(
+    @field:NotBlank(message = "New plan code is required")
+    val newPlanCode: String
+)
+
+data class GrantCreditsCommand(
+    @field:Min(value = 1, message = "Bonus credits must be at least 1")
+    val bonusCredits: Int
+)`
+  },
+  {
+    id: 'saas-platform-analytics-service',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/service/PlatformAnalyticsService.kt',
+    fileName: 'PlatformAnalyticsService.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane analytics aggregating MRR, active vs trial metrics, Tenant 360 profile, and tier overrides',
+    code: `package com.micropms.saas.service
+
+import com.micropms.common.dto.TenantSummaryDto
+import com.micropms.common.exception.ResourceNotFoundException
+import com.micropms.common.usage.TenantUsageProvider
+import com.micropms.multitenancy.cache.TenantCacheService
+import com.micropms.saas.dto.*
+import com.micropms.saas.entity.*
+import com.micropms.saas.repository.*
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.util.UUID
+
+@Service
+@Transactional(readOnly = true)
+class PlatformAnalyticsService(
+    private val tenantRepository: TenantRepository,
+    private val subscriptionRepository: SubscriptionRepository,
+    private val subscriptionPlanRepository: SubscriptionPlanRepository,
+    private val auditLogRepository: AuditImpersonationLogRepository,
+    private val tenantCacheService: TenantCacheService,
+    private val tenantUsageProvider: TenantUsageProvider? = null
+) {
+    fun getDashboardMetrics(): PlatformDashboardMetricsDto {
+        val activeTenants = tenantRepository.countByStatus(TenantStatus.ACTIVE)
+        val trialTenants = tenantRepository.countByStatus(TenantStatus.TRIAL)
+        val pastDueTenants = tenantRepository.countByStatus(TenantStatus.PAST_DUE)
+        val totalMrr = subscriptionRepository.sumActiveMrrCents()
+        val totalCreditsRemaining = subscriptionRepository.sumTotalCreditsRemaining()
+        // ...
+        return PlatformDashboardMetricsDto(...)
+    }
+
+    fun getTenant360Profile(tenantId: UUID): Tenant360ProfileDto {
+        val tenant = tenantRepository.findById(tenantId).orElseThrow()
+        val subscription = subscriptionRepository.findByTenantId(tenantId).orElseThrow()
+        val usage = tenantUsageProvider?.getTenantUsage(tenantId)
+        val recentLogs = auditLogRepository.findTop10ByTenantIdOrderByCreatedAtDesc(tenantId)
+        // ...
+        return Tenant360ProfileDto(...)
+    }
+
+    @Transactional
+    fun updateTenantTier(tenantId: UUID, newPlanCode: String): Tenant360ProfileDto {
+        // Updates plan and evicts Redis tenant cache key
+    }
+
+    @Transactional
+    fun grantWhatsappCredits(tenantId: UUID, bonusCredits: Int): Tenant360ProfileDto {
+        // Increments smsWhatsappCredits on subscription
+    }
+}`
+  },
+  {
+    id: 'saas-platform-analytics-controller',
+    module: 'module-saas-platform',
+    path: '/module-saas-platform/src/main/kotlin/com/micropms/saas/controller/PlatformAnalyticsController.kt',
+    fileName: 'PlatformAnalyticsController.kt',
+    language: 'kotlin',
+    category: 'saas',
+    description: 'Control Plane analytics controller with platform:subscriptions:manage & platform:tenants:manage RBAC',
+    code: `package com.micropms.saas.controller
+
+import com.micropms.common.dto.ApiResponse
+import com.micropms.saas.dto.*
+import com.micropms.saas.service.PlatformAnalyticsService
+import jakarta.validation.Valid
+import org.springframework.http.ResponseEntity
+import org.springframework.security.access.prepost.PreAuthorize
+import org.springframework.web.bind.annotation.*
+import java.util.UUID
+
+@RestController
+@RequestMapping("/api/platform/analytics")
+class PlatformAnalyticsController(private val platformAnalyticsService: PlatformAnalyticsService) {
+
+    @GetMapping("/dashboard-metrics")
+    @PreAuthorize("hasAuthority('platform:subscriptions:manage') or hasAuthority('ROLE_SUPER_ADMIN')")
+    fun getDashboardMetrics() =
+        ResponseEntity.ok(ApiResponse.ok(platformAnalyticsService.getDashboardMetrics(), "Platform dashboard metrics retrieved successfully"))
+
+    @GetMapping("/tenants/{tenantId}/360")
+    @PreAuthorize("hasAuthority('platform:tenants:manage') or hasAuthority('ROLE_SUPER_ADMIN')")
+    fun getTenant360Profile(@PathVariable tenantId: UUID) =
+        ResponseEntity.ok(ApiResponse.ok(platformAnalyticsService.getTenant360Profile(tenantId), "Tenant 360 profile retrieved successfully"))
+
+    @PostMapping("/tenants/{tenantId}/change-tier")
+    @PreAuthorize("hasAuthority('platform:subscriptions:manage') or hasAuthority('ROLE_SUPER_ADMIN')")
+    fun changeTenantTier(@PathVariable tenantId: UUID, @Valid @RequestBody command: ChangeTenantTierCommand) =
+        ResponseEntity.ok(ApiResponse.ok(platformAnalyticsService.updateTenantTier(tenantId, command.newPlanCode), "Tenant subscription tier updated successfully"))
+
+    @PostMapping("/tenants/{tenantId}/grant-credits")
+    @PreAuthorize("hasAuthority('platform:tenants:manage') or hasAuthority('ROLE_SUPER_ADMIN')")
+    fun grantCredits(@PathVariable tenantId: UUID, @Valid @RequestBody command: GrantCreditsCommand) =
+        ResponseEntity.ok(ApiResponse.ok(platformAnalyticsService.grantWhatsappCredits(tenantId, command.bonusCredits), "Bonus WhatsApp credits granted successfully"))
+}`
+  },
+  {
     id: 'eav-entities',
     module: 'module-clinic-core',
     path: '/module-clinic-core/src/main/kotlin/com/micropms/clinic/entity/CustomFieldDefinition.kt',
@@ -4677,6 +4862,198 @@ export default function App() {
           },
           timestamp: now
         });
+      } else if (endpoint === 'platform-dashboard-metrics') {
+        if (simulatedRole !== 'SUPER_ADMIN') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Lacks required authority 'platform:subscriptions:manage'. Super Admin Control Plane access required.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Platform dashboard metrics retrieved successfully",
+            data: {
+              activeTenantsCount: 42,
+              totalMrrCents: 12450000,
+              trialTenantsCount: 18,
+              pastDueTenantsCount: 3,
+              renewalRatePercentage: 93.3,
+              globalWhatsappCreditsUsed: 3840,
+              globalWhatsappCreditsTotal: 12500
+            },
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'platform-tenant-360') {
+        if (simulatedRole !== 'SUPER_ADMIN') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Lacks required authority 'platform:tenants:manage'. Super Admin Control Plane access required.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Tenant 360 profile retrieved successfully",
+            data: {
+              tenant: {
+                id: currentTenantUuid,
+                name: "Metro Health Medical Center",
+                slug: "metro-health",
+                status: "ACTIVE",
+                specialty: "PEDIATRICS",
+                subscriptionTier: "GROWTH",
+                phone: "+1-555-019-2831",
+                createdAt: "2026-01-15T09:00:00Z"
+              },
+              subscription: {
+                planCode: "GROWTH",
+                planName: "Growth Practice Tier",
+                status: "ACTIVE",
+                priceCents: 29900,
+                currentPeriodStart: "2026-10-01T00:00:00Z",
+                currentPeriodEnd: "2026-11-01T00:00:00Z",
+                creditsRemaining: 450
+              },
+              usageStats: {
+                activeDoctorsCount: 4,
+                maxDoctors: 10,
+                totalEncountersCount: 382,
+                totalStorageBytes: 8372224
+              },
+              billingHistory: [
+                {
+                  id: "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+                  invoiceNumber: "PMS-SUB-METRO-HEALTH-202610",
+                  amountCents: 29900,
+                  status: "PAID",
+                  periodStart: "2026-09-01T00:00:00Z",
+                  periodEnd: "2026-10-01T00:00:00Z",
+                  paidAt: "2026-09-02T10:14:22Z"
+                },
+                {
+                  id: "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
+                  invoiceNumber: "PMS-SUB-METRO-HEALTH-202609",
+                  amountCents: 29900,
+                  status: "PAID",
+                  periodStart: "2026-08-01T00:00:00Z",
+                  periodEnd: "2026-09-01T00:00:00Z",
+                  paidAt: "2026-08-02T09:30:11Z"
+                }
+              ],
+              recentAuditLogs: [
+                {
+                  id: "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+                  adminId: "0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+                  justification: "Diagnosing HL7 lab interface connectivity failure",
+                  ipAddress: "192.168.1.100",
+                  createdAt: "2026-10-14T11:20:00Z",
+                  sessionExpiresAt: "2026-10-14T11:50:00Z"
+                }
+              ]
+            },
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'platform-change-tier') {
+        if (simulatedRole !== 'SUPER_ADMIN') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Lacks required authority 'platform:subscriptions:manage'. Super Admin Control Plane access required.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Tenant subscription tier updated successfully to 'ENTERPRISE' (Redis cache evicted)",
+            data: {
+              tenant: {
+                id: currentTenantUuid,
+                name: "Metro Health Medical Center",
+                slug: "metro-health",
+                status: "ACTIVE",
+                specialty: "PEDIATRICS",
+                subscriptionTier: "ENTERPRISE",
+                phone: "+1-555-019-2831",
+                createdAt: "2026-01-15T09:00:00Z"
+              },
+              subscription: {
+                planCode: "ENTERPRISE",
+                planName: "Enterprise Hospital Tier",
+                status: "ACTIVE",
+                priceCents: 79900,
+                currentPeriodStart: "2026-10-01T00:00:00Z",
+                currentPeriodEnd: "2026-11-01T00:00:00Z",
+                creditsRemaining: 2500
+              },
+              usageStats: {
+                activeDoctorsCount: 4,
+                maxDoctors: 50,
+                totalEncountersCount: 382,
+                totalStorageBytes: 8372224
+              },
+              billingHistory: [],
+              recentAuditLogs: []
+            },
+            timestamp: now
+          });
+        }
+      } else if (endpoint === 'platform-grant-credits') {
+        if (simulatedRole !== 'SUPER_ADMIN') {
+          setApiExecutionStatus('error');
+          setApiResponsePayload({
+            code: 403,
+            message: "Access Denied: Lacks required authority 'platform:tenants:manage'. Super Admin Control Plane access required.",
+            errors: null,
+            timestamp: now
+          });
+        } else {
+          setApiExecutionStatus('success');
+          setApiResponsePayload({
+            code: 200,
+            message: "Bonus WhatsApp credits granted successfully (+500 messages)",
+            data: {
+              tenant: {
+                id: currentTenantUuid,
+                name: "Metro Health Medical Center",
+                slug: "metro-health",
+                status: "ACTIVE",
+                specialty: "PEDIATRICS",
+                subscriptionTier: "GROWTH",
+                phone: "+1-555-019-2831",
+                createdAt: "2026-01-15T09:00:00Z"
+              },
+              subscription: {
+                planCode: "GROWTH",
+                planName: "Growth Practice Tier",
+                status: "ACTIVE",
+                priceCents: 29900,
+                currentPeriodStart: "2026-10-01T00:00:00Z",
+                currentPeriodEnd: "2026-11-01T00:00:00Z",
+                creditsRemaining: 950
+              },
+              usageStats: {
+                activeDoctorsCount: 4,
+                maxDoctors: 10,
+                totalEncountersCount: 382,
+                totalStorageBytes: 8372224
+              },
+              billingHistory: [],
+              recentAuditLogs: []
+            },
+            timestamp: now
+          });
+        }
       }
     }, 180);
   };
@@ -5512,6 +5889,34 @@ export default function App() {
                   >
                     <span>POST /notifications/dispatch</span>
                     <span className="text-[10px] font-mono text-emerald-400">200</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('platform-dashboard-metrics')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /platform/analytics/dashboard</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'SUPER_ADMIN' ? '200' : '403'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('platform-tenant-360')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>GET /platform/analytics/tenants/360</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'SUPER_ADMIN' ? '200' : '403'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('platform-change-tier')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /tenants/change-tier</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'SUPER_ADMIN' ? '200' : '403'}</span>
+                  </button>
+                  <button
+                    onClick={() => handleExecuteApiSimulation('platform-grant-credits')}
+                    className="px-3 py-1.5 text-xs text-left font-medium bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded text-slate-200 flex items-center justify-between"
+                  >
+                    <span>POST /tenants/grant-credits</span>
+                    <span className="text-[10px] font-mono text-cyan-400">{simulatedRole === 'SUPER_ADMIN' ? '200' : '403'}</span>
                   </button>
                   <button
                     onClick={() => handleExecuteApiSimulation('validation-error')}

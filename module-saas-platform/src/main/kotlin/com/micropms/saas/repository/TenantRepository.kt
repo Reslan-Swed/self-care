@@ -14,4 +14,5 @@ interface TenantRepository : BaseRepository<Tenant, UUID> {
     fun findBySlug(slug: String): Optional<Tenant>
     fun existsBySlug(slug: String): Boolean
     fun findByStatus(status: TenantStatus, pageable: Pageable): Page<Tenant>
+    fun countByStatus(status: TenantStatus): Long
 }

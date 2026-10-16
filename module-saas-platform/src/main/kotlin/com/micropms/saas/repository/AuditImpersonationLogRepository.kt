@@ -11,4 +11,5 @@ import java.util.UUID
 interface AuditImpersonationLogRepository : BaseRepository<AuditImpersonationLog, UUID> {
     fun findByAdminId(adminId: UUID, pageable: Pageable): Page<AuditImpersonationLog>
     fun findByTenantId(tenantId: UUID, pageable: Pageable): Page<AuditImpersonationLog>
+    fun findTop10ByTenantIdOrderByCreatedAtDesc(tenantId: UUID): List<AuditImpersonationLog>
 }

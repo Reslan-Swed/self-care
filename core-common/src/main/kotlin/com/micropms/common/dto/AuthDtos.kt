@@ -50,7 +50,9 @@ data class TenantSummaryDto(
     val slug: String,
     val status: String,
     val specialty: String? = null,
-    val subscriptionTier: String? = null
+    val subscriptionTier: String? = null,
+    val phone: String? = null,
+    val createdAt: Instant? = null
 )
 
 /**
