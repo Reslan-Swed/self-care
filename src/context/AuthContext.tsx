@@ -17,6 +17,10 @@ interface AuthContextValue {
   logout: () => void;
   switchRole: (role: UserRole) => void;
   switchTenant: (tenant: TenantSummaryDto) => void;
+  impersonatedTenant: TenantSummaryDto | null;
+  isImpersonating: boolean;
+  startImpersonation: (tenant: TenantSummaryDto, justification: string) => Promise<string>;
+  stopImpersonation: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -164,6 +168,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfileDto | null>(DEMO_PROFILES.RECEPTIONIST.user);
   const [tenant, setTenant] = useState<TenantSummaryDto | null>(DEMO_PROFILES.RECEPTIONIST.tenant);
   const [token, setToken] = useState<string | null>(() => getAuthToken() || 'mock-jwt-token-receptionist');
+  const [impersonatedTenant, setImpersonatedTenant] = useState<TenantSummaryDto | null>(() => {
+    try {
+      const stored = sessionStorage.getItem('micropms_impersonated_tenant');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const isImpersonating = !!impersonatedTenant;
 
   // Sync token to apiClient headers on mount
   useEffect(() => {
@@ -235,12 +249,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [switchRole]);
 
   const logout = useCallback(() => {
+    sessionStorage.removeItem('micropms_impersonated_tenant');
+    sessionStorage.removeItem('micropms_impersonation_token');
+    setImpersonatedTenant(null);
     setUser(null);
     setTenant(null);
     setToken(null);
     setAuthToken(null);
     setTenantSlug(null);
   }, []);
+
+  const startImpersonation = useCallback(async (targetTenant: TenantSummaryDto, justification: string) => {
+    try {
+      const res = await fetch('/api/platform/impersonate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ tenantId: targetTenant.id, justification })
+      });
+      let impersonationToken = `mock-impersonation-jwt-${targetTenant.slug}`;
+      if (res.ok) {
+        const json = await res.json();
+        if (json.data?.token) {
+          impersonationToken = json.data.token;
+        }
+      }
+      sessionStorage.setItem('micropms_impersonated_tenant', JSON.stringify(targetTenant));
+      sessionStorage.setItem('micropms_impersonation_token', impersonationToken);
+      setImpersonatedTenant(targetTenant);
+      setTenant(targetTenant);
+      setTenantSlug(targetTenant.slug);
+      setToken(impersonationToken);
+      setAuthToken(impersonationToken);
+      return impersonationToken;
+    } catch {
+      const fallbackToken = `mock-impersonation-jwt-${targetTenant.slug}`;
+      sessionStorage.setItem('micropms_impersonated_tenant', JSON.stringify(targetTenant));
+      setImpersonatedTenant(targetTenant);
+      setTenant(targetTenant);
+      setTenantSlug(targetTenant.slug);
+      setToken(fallbackToken);
+      setAuthToken(fallbackToken);
+      return fallbackToken;
+    }
+  }, [token]);
+
+  const stopImpersonation = useCallback(() => {
+    sessionStorage.removeItem('micropms_impersonated_tenant');
+    sessionStorage.removeItem('micropms_impersonation_token');
+    setImpersonatedTenant(null);
+    switchRole('SUPER_ADMIN');
+  }, [switchRole]);
 
   const value: AuthContextValue = {
     user,
@@ -256,7 +314,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     logout,
     switchRole,
-    switchTenant
+    switchTenant,
+    impersonatedTenant,
+    isImpersonating,
+    startImpersonation,
+    stopImpersonation
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -7,6 +7,7 @@ import { ProtectedRoute } from './ProtectedRoute';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguageSwitcher } from '../../i18n/useLanguageSwitcher';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
+import { ImpersonationBanner } from '../platform/ImpersonationBanner';
 
 // Import Views
 import ReceptionCockpitView from '../views/ReceptionCockpitView';
@@ -145,6 +146,9 @@ export const AppLayout: React.FC = () => {
 
   return (
     <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200 ${isRtl ? 'rtl' : 'ltr'}`}>
+      {/* Persistent Impersonation Alert Banner in prominent RED */}
+      <ImpersonationBanner onExitSession={() => setCurrentRoute('/platform/analytics')} />
+
       {/* Top Bar Contract with 3 zones: Brand, Omnibox, Actions */}
       <TopNavbar
         onOpenOmnibox={() => setOmniboxOpen(true)}
